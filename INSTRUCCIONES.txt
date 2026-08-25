@@ -1,0 +1,100 @@
+INSTRUCCIONES - POS La Loma 1.0.0
+=================================
+
+Instalación en la PC del negocio (1 vez)
+----------------------------------------
+1. Copie PosLaLoma_Setup_1.0.0.exe en la PC (por USB o red).
+2. Doble clic y Siguiente/Siguiente/Finalizar. No pide permisos de
+   administrador. Se crean accesos directos en Escritorio e Inicio.
+3. Al abrir el programa por primera vez pide crear el PIN de acceso
+   (4 a 6 dígitos). Escríbalo en un lugar seguro.
+
+Dónde está cada cosa
+--------------------
+- Programa:   %LOCALAPPDATA%\Programs\PosLaLoma
+- Base de datos, respaldos y fotos:
+              %APPDATA%\PosLaLoma\data
+- Respaldo automático (cada 6 horas, se conservan 14):
+              %APPDATA%\PosLaLoma\data\backups
+              (archivos pos_AAAAAMMDD_HHMMSS.db + pos_..._images.zip)
+- Configuración de cada PC:
+              %APPDATA%\PosLaLoma\config.ini  (crearlo solo si hace falta)
+- Actualizaciones que sirve el servidor:
+              %APPDATA%\PosLaLoma\updates
+
+Configurar el servidor (PC que guarda la base)
+----------------------------------------------
+1. Instale el programa normalmente.
+2. Comparta la carpeta de documentos en red:
+   - Cree la carpeta C:\documentos (o donde quiera).
+   - Clic derecho > Propiedades > Compartir > "Compartir".
+   - Añada "Todos" con permiso de Lectura/Escritura.
+3. En %APPDATA%\PosLaLoma\config.ini cree el archivo con:
+
+   [pos]
+   station = CAJA1
+   docs_path = \\NOMBRE-DE-ESTA-PC\documentos
+
+   (En el servidor no se pone server_url; usa el servidor local).
+4. En el Router asigne una IP fija a esta PC (p. ej. 192.168.1.10).
+5. Abra el POS. La primera vez Windows preguntará por el Firewall:
+   marque "Redes privadas" y Aceptar. Si no pregunta, añada manualmente:
+   netsh advfirewall firewall add rule name="PosLaLoma 8000"
+   dir=in action=allow protocol=TCP localport=8000
+6. Para actualizar: deje el setup nuevo en %APPDATA%\PosLaLoma\updates
+   y en Configuración > Actualizaciones > "Buscar actualizaciones".
+
+Configurar cada caja (las demás PCs)
+------------------------------------
+1. Instale el programa normalmente.
+2. Cree %APPDATA%\PosLaLoma\config.ini con:
+
+   [pos]
+   server_url = http://192.168.1.10:8000
+   station = CAJA2
+   docs_path = \\192.168.1.10\documentos
+
+3. Abra el POS: pide el PIN (el mismo creado en el servidor).
+4. En Configuración > Impresora de tickets: elija la impresora térmica
+   de esa caja y pruébela.
+5. En Configuración > Documentos: "Probar carpeta" para confirmar que la
+   carpeta compartida responde. Si no, guarda en Documentos\PosLaLoma.
+
+Facturas y documentos
+---------------------
+Todas las facturas (XML y PDF) se guardan en la carpeta compartida,
+en subcarpetas por mes:  Facturas\2026-08\V-00001_2026-08-09.pdf
+Las cajas imprimen el ticket térmico con su impresora local; el PDF A4
+se imprime con la impresora predeterminada de Windows de cada caja.
+
+Respaldos y restauración
+------------------------
+- Respaldos automáticos cada 6 h en %APPDATA%\PosLaLoma\data\backups.
+- Para restaurar manualmente:
+  1. Cierre el POS y el servidor.
+  2. Copie el respaldo (pos_AAAAAMMDD_HHMMSS.db) sobre pos.db:
+     xcopy "%APPDATA%\PosLaLoma\data\backups\pos_20260809_223000.db"
+           "%APPDATA%\PosLaLoma\data\pos.db" /Y
+  3. Si las fotos se perdieron, descomprima el zip pos_..._images.zip
+     dentro de %APPDATA%\PosLaLoma\data\product_images.
+  4. Abra el POS.
+- Antes de cambios grandes, copie toda la carpeta data a un USB.
+
+Prueba rápida de instalación (técnico)
+--------------------------------------
+PosLaLoma.exe --selftest   valida base, datos y servicios sin abrir la ventana.
+
+Seguridad
+---------
+- El PIN de acceso y las claves de Hacienda se guardan en la base local.
+  No exponga el puerto 8000 a internet; mantenga la PC servidor en la red
+  interna del negocio.
+- Proteja la carpeta %APPDATA%\PosLaLoma (y los respaldos) con la cuenta
+  de Windows del negocio.
+
+Actualizar el programa
+----------------------
+1. En el servidor: copie el setup nuevo a %APPDATA%\PosLaLoma\updates.
+2. En cada PC: Configuración > Actualizaciones > "Buscar actualizaciones".
+   La caja descarga e instala sola (se cierra y se abre de nuevo).
+3. Los datos (%APPDATA%\PosLaLoma\data) no se tocan al actualizar.

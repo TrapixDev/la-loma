@@ -1,0 +1,3 @@
+# Dependencias del POS La Loma (fijadas para reproducir el .exe)
+PyQt6==6.11.0
+requests==2.34.2
