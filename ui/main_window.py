@@ -54,7 +54,7 @@ class MainWindow(QMainWindow):
         self.services = services
         self._jobs: list[dict] = []
         self.setWindowTitle("POS - La Loma")
-        self.setMinimumSize(1100, 700)
+        self.setMinimumSize(1024, 600)
         self._setup_ui()
         self._wire_signals()
         self._start_connection_checker()

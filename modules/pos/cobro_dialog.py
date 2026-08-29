@@ -174,7 +174,8 @@ class CobroDialog(QDialog):
         self._root: QVBoxLayout | None = None
         self.setObjectName("CobroDialog")
         self.setWindowTitle("Cobrar")
-        self.setFixedSize(800, 620)
+        self.setMinimumSize(600, 500)
+        self.setMaximumHeight(620)
         self.setStyleSheet(_COBRO_QSS)
         self._build_ui()
         self._update_change()

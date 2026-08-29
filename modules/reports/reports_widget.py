@@ -311,12 +311,22 @@ class MovimientosDiaDialog(QDialog):
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"Movimientos del día {_fmt_day(day)}")
-        self.setMinimumSize(520, 400)
+        self.setMinimumSize(520, 250)
+        self.setMaximumHeight(480)
         self._setup_ui(movimientos)
 
     def _setup_ui(self, movimientos: list[dict]) -> None:
         from PyQt6.QtGui import QBrush, QColor
-        layout = QVBoxLayout(self)
+        from PyQt6.QtWidgets import QScrollArea
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(18, 14, 18, 10)
 
         title = QLabel(f"Movimientos del {_fmt_day(movimientos[0]['fecha']) if movimientos else ''}")
         title.setObjectName("sectionTitle")
@@ -352,10 +362,13 @@ class MovimientosDiaDialog(QDialog):
         table.setColumnWidth(2, 90)
         layout.addWidget(table, 1)
 
+        scroll.setWidget(container)
+        root_layout.addWidget(scroll, 1)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("Cerrar")
-        layout.addWidget(buttons)
+        root_layout.addWidget(buttons)
 
 
 class ReportsWidget(QWidget):
