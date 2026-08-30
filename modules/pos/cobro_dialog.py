@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from utils.helpers import format_currency
+from utils.helpers import format_currency, NoWheelComboBox
 
 _COBRO_QSS = """
 QDialog#CobroDialog {
@@ -313,7 +313,7 @@ class CobroDialog(QDialog):
         self.mix_method_a.setFixedWidth(80)
         self.mix_amount_a = self._build_amount_field()
 
-        self.mix_method_b = QComboBox()
+        self.mix_method_b = NoWheelComboBox()
         self.mix_method_b.setObjectName("mixMethod")
         self.mix_method_b.addItems(["Tarjeta", "Sinpe"])
         self.mix_amount_b = self._build_amount_field()

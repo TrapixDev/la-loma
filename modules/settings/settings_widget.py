@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from utils.helpers import NoWheelComboBox
+
 CONFIG_KEYS = [
     "company_name",
     "company_id",
@@ -144,7 +146,7 @@ class SettingsWidget(QWidget):
         hacienda_form.setContentsMargins(18, 14, 18, 14)
         hacienda_form.setSpacing(12)
 
-        self.environment_combo = QComboBox()
+        self.environment_combo = NoWheelComboBox()
         self.environment_combo.addItem("Sandbox (pruebas)", "sandbox")
         self.environment_combo.addItem("Producción", "produccion")
         self.username_input = QLineEdit()
@@ -218,7 +220,7 @@ class SettingsWidget(QWidget):
         printer_form.setContentsMargins(18, 14, 18, 14)
         printer_form.setSpacing(12)
 
-        self.printer_combo = QComboBox()
+        self.printer_combo = NoWheelComboBox()
         self.printer_combo.addItem("Predeterminada de Windows", "")
         for _printer in QPrinterInfo.availablePrinters():
             self.printer_combo.addItem(_printer.printerName(), _printer.printerName())

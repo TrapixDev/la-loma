@@ -33,7 +33,7 @@ from network.remote_db import AuthError, ServerError
 from network.session import session
 from ui.login_dialog import LoginDialog
 from ui.recovery_dialog import ConnectionRecoveryDialog
-from utils.helpers import calculate_totals, format_currency
+from utils.helpers import calculate_totals, format_currency, NoWheelComboBox
 from modules.documentos import generar_documentos
 from modules.documentos.ticket import imprimir_ticket_venta
 from modules.documentos.xml_factura import build_factura_payload
@@ -129,7 +129,7 @@ class POSWidget(QWidget):
         self.search_input.setPlaceholderText("Buscar por nombre, código o madera")
         self.search_input.textChanged.connect(lambda _: self._rebuild_product_grid())
 
-        self.category_combo = QComboBox()
+        self.category_combo = NoWheelComboBox()
         self.category_combo.currentIndexChanged.connect(lambda _: self._rebuild_product_grid())
 
         left.addWidget(self.search_input)

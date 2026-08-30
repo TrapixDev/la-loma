@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from database.models import Client
+from utils.helpers import NoWheelComboBox
 
 ID_TYPES = [
     ("01", "01 - Cédula Física"),
@@ -48,7 +49,7 @@ class ClientDialog(QDialog):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        self.id_type_combo = QComboBox()
+        self.id_type_combo = NoWheelComboBox()
         for value, label in ID_TYPES:
             self.id_type_combo.addItem(label, value)
 

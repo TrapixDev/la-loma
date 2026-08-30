@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from utils.helpers import format_currency
+from utils.helpers import format_currency, NoWheelSpinBox, NoWheelComboBox
 from modules.documentos import reimprimir_factura, generar_nota_credito
 
 MONTH_NAMES = [
@@ -71,13 +71,13 @@ class ExpenseDialog(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
-        self.amount_input = QDoubleSpinBox()
+        self.amount_input = NoWheelSpinBox()
         self.amount_input.setRange(0.0, 99_999_999.0)
         self.amount_input.setDecimals(2)
         self.amount_input.setPrefix("₡ ")
         form.addRow("Monto:", self.amount_input)
 
-        self.category_input = QComboBox()
+        self.category_input = NoWheelComboBox()
         self.category_input.setEditable(True)
         try:
             categories = self.services["expenses"].get_categories()
@@ -93,7 +93,7 @@ class ExpenseDialog(QDialog):
         self.description_input.setPlaceholderText("Opcional")
         form.addRow("Descripción:", self.description_input)
 
-        self.method_input = QComboBox()
+        self.method_input = NoWheelComboBox()
         for method in PAYMENT_METHODS:
             self.method_input.addItem(method)
         form.addRow("Método de pago:", self.method_input)
@@ -167,12 +167,12 @@ class NotaCreditoDialog(QDialog):
 
         form = QFormLayout()
 
-        self.motivo_combo = QComboBox()
+        self.motivo_combo = NoWheelComboBox()
         for code, label in _MOTIVOS_NOTA:
             self.motivo_combo.addItem(label, code)
         form.addRow("Motivo:", self.motivo_combo)
 
-        self.monto_input = QDoubleSpinBox()
+        self.monto_input = NoWheelSpinBox()
         self.monto_input.setRange(0.0, 99_999_999.0)
         self.monto_input.setDecimals(2)
         self.monto_input.setPrefix("₡ ")
@@ -414,7 +414,7 @@ class ReportsWidget(QWidget):
 
         toolbar_layout.addSpacing(12)
 
-        self.month_combo = QComboBox()
+        self.month_combo = NoWheelComboBox()
         for index, name in enumerate(MONTH_NAMES, start=1):
             self.month_combo.addItem(name, index)
         today = date.today()
@@ -422,7 +422,7 @@ class ReportsWidget(QWidget):
         self.month_combo.currentIndexChanged.connect(self.refresh)
         toolbar_layout.addWidget(self.month_combo)
 
-        self.year_combo = QComboBox()
+        self.year_combo = NoWheelComboBox()
         for year in range(YEAR_MIN, YEAR_MAX + 1):
             self.year_combo.addItem(str(year), year)
         self.year_combo.setCurrentText(str(today.year))

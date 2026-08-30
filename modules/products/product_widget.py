@@ -10,12 +10,14 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -24,7 +26,7 @@ from PyQt6.QtWidgets import (
 
 from database.models import Product
 from network.image_store import ImageStore
-from utils.helpers import format_currency
+from utils.helpers import format_currency, NoWheelSpinBox, NoWheelComboBox
 
 TAX_TYPES = [("gravado", "Gravado (IVA)"), ("exento", "Exento")]
 
@@ -43,12 +45,21 @@ class ProductDialog(QDialog):
         self._remove_image_flag = False
         self.setWindowTitle("Editar Producto" if product else "Nuevo Producto")
         self.setMinimumWidth(460)
+        self.setMaximumHeight(500)
         self._setup_ui()
         if product:
             self._load_product(product)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(18, 14, 18, 10)
 
         self.code_input = QLineEdit()
         self.code_input.setPlaceholderText("Código interno")
@@ -57,27 +68,27 @@ class ProductDialog(QDialog):
         self.description_input = QLineEdit()
         self.description_input.setPlaceholderText("Descripción")
 
-        self.category_combo = QComboBox()
+        self.category_combo = NoWheelComboBox()
         for category in self.services["category"].get_all(active_only=True) or []:
             self.category_combo.addItem(category.name, category.id)
 
-        self.cost_spin = QDoubleSpinBox()
+        self.cost_spin = NoWheelSpinBox()
         self.cost_spin.setRange(0.0, 99_999_999.0)
         self.cost_spin.setDecimals(2)
         self.cost_spin.setToolTip("Costo de fabricación del producto. Se resta automáticamente en los reportes por cada venta.")
-        self.sale_spin = QDoubleSpinBox()
+        self.sale_spin = NoWheelSpinBox()
         self.sale_spin.setRange(0.0, 99_999_999.0)
         self.sale_spin.setDecimals(2)
 
         self.wood_input = QLineEdit()
         self.wood_input.setPlaceholderText("Tipo de madera (ej. cedro, roble)")
 
-        self.tax_type_combo = QComboBox()
+        self.tax_type_combo = NoWheelComboBox()
         for value, label in TAX_TYPES:
             self.tax_type_combo.addItem(label, value)
         self.tax_type_combo.currentIndexChanged.connect(self._on_tax_type_changed)
 
-        self.tax_rate_spin = QDoubleSpinBox()
+        self.tax_rate_spin = NoWheelSpinBox()
         self.tax_rate_spin.setRange(0.0, 100.0)
         self.tax_rate_spin.setDecimals(2)
         self.tax_rate_spin.setSuffix(" %")
@@ -119,6 +130,9 @@ class ProductDialog(QDialog):
         image_buttons.addWidget(remove_button)
         layout.addLayout(image_buttons)
 
+        scroll.setWidget(container)
+        root_layout.addWidget(scroll, 1)
+
         buttons = QHBoxLayout()
         save_button = QPushButton("Guardar")
         save_button.setObjectName("primaryButton")
@@ -127,7 +141,7 @@ class ProductDialog(QDialog):
         cancel_button.clicked.connect(self.reject)
         buttons.addWidget(save_button)
         buttons.addWidget(cancel_button)
-        layout.addLayout(buttons)
+        root_layout.addLayout(buttons)
 
     def _on_tax_type_changed(self) -> None:
         if self.tax_type_combo.currentData() == "exento":
@@ -265,7 +279,7 @@ class ProductWidget(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Buscar producto…")
         self.search_input.textChanged.connect(lambda _: self.refresh())
-        self.category_combo = QComboBox()
+        self.category_combo = NoWheelComboBox()
         self.category_combo.currentIndexChanged.connect(lambda _: self.refresh())
 
         new_button = QPushButton("Nuevo Producto")

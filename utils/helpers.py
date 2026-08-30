@@ -32,3 +32,23 @@ def calculate_totals(items: list[dict], exento: bool = False) -> dict:
         "tax_amount": round(tax_amount, 2),
         "total": round(total, 2),
     }
+
+
+from PyQt6.QtWidgets import QDoubleSpinBox
+
+
+class NoWheelSpinBox(QDoubleSpinBox):
+    """QDoubleSpinBox que ignora la rueda del mouse para evitar cambios accidentales."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+from PyQt6.QtWidgets import QComboBox
+
+
+class NoWheelComboBox(QComboBox):
+    """QComboBox que ignora la rueda del mouse para evitar cambios accidentales."""
+
+    def wheelEvent(self, event):
+        event.ignore()
