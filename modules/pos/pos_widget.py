@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -56,7 +57,7 @@ class ProductCard(QWidget):
         self.product = product
         self.setObjectName("productCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedHeight(210)
+        self.setFixedHeight(170)
         self.setMinimumWidth(170)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -66,7 +67,7 @@ class ProductCard(QWidget):
 
         self.image_label = QLabel()
         self.image_label.setObjectName("productCardImage")
-        self.image_label.setFixedHeight(112)
+        self.image_label.setFixedHeight(80)
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.image_label)
 
@@ -148,9 +149,17 @@ class POSWidget(QWidget):
 
         right = QWidget()
         right.setObjectName("cartPanel")
-        right.setFixedWidth(480)
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(12, 12, 12, 12)
+        right.setFixedWidth(380)
+        right_root = QVBoxLayout(right)
+        right_root.setContentsMargins(0, 0, 0, 0)
+        right_root.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(12, 12, 12, 8)
         right_layout.setSpacing(8)
 
         title = QLabel("Carrito de Compra")
@@ -171,10 +180,10 @@ class POSWidget(QWidget):
         self.cart_table.setObjectName("cartTable")
         self.cart_table.setHorizontalHeaderLabels(["Producto", "Cant.", "Precio", "Total"])
         self.cart_table.horizontalHeader().setObjectName("cartHeader")
-        self.cart_table.setColumnWidth(0, 190)
-        self.cart_table.setColumnWidth(1, 50)
-        self.cart_table.setColumnWidth(2, 100)
-        self.cart_table.setColumnWidth(3, 100)
+        self.cart_table.setColumnWidth(0, 140)
+        self.cart_table.setColumnWidth(1, 40)
+        self.cart_table.setColumnWidth(2, 90)
+        self.cart_table.setColumnWidth(3, 90)
         self.cart_table.verticalHeader().setVisible(False)
         self.cart_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.cart_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -234,15 +243,20 @@ class POSWidget(QWidget):
         self.simplified_button.clicked.connect(self._on_simplified_toggle)
         right_layout.addWidget(self.simplified_button)
 
+        right_layout.addStretch()
+
+        scroll.setWidget(right_container)
+        right_root.addWidget(scroll, 1)
+
         self.charge_button = QPushButton("COBRAR")
         self.charge_button.setObjectName("primaryButton")
         self.charge_button.clicked.connect(self.process_payment)
-        right_layout.addWidget(self.charge_button)
+        right_root.addWidget(self.charge_button)
 
         self.cancel_button = QPushButton("Cancelar Venta")
         self.cancel_button.setObjectName("dangerButton")
         self.cancel_button.clicked.connect(self._clear_cart)
-        right_layout.addWidget(self.cancel_button)
+        right_root.addWidget(self.cancel_button)
 
         root.addWidget(right, 0)
 
@@ -275,6 +289,10 @@ class POSWidget(QWidget):
         else:
             products = service.get_all(category_id=category_id, active_only=True) or []
 
+        # Columnas adaptativas: 3 si <1200px, 4 si >=1200px
+        available = self.width() - 380 - 24
+        num_cols = 3 if available < 1200 else 4
+
         row, column = 0, 0
         image_store = self.services.get("images")
         for product in products:
@@ -287,11 +305,11 @@ class POSWidget(QWidget):
             if image_path and image_store is not None:
                 image_store.get_pixmap_async(image_path, card.set_image_pixmap)
             column += 1
-            if column >= 4:
+            if column >= num_cols:
                 column = 0
                 row += 1
         self.products_layout.setRowStretch(row + 1, 1)
-        for index in range(4):
+        for index in range(num_cols):
             self.products_layout.setColumnStretch(index, 1)
 
     def add_to_cart(self, product) -> None:

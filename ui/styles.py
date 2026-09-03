@@ -3,7 +3,7 @@
 QSS_MAIN = """
 * {
     font-family: 'Segoe UI', 'Noto Sans', sans-serif;
-    font-size: 16px;
+    font-size: 13px;
     font-weight: 500;
     outline: none;
 }
@@ -37,8 +37,8 @@ QPushButton#navButton {
     color: #9aa4b2;
     border: none;
     border-radius: 6px;
-    padding: 10px 18px;
-    font-size: 16px;
+    padding: 8px 14px;
+    font-size: 13px;
     font-weight: 500;
 }
 
@@ -81,9 +81,9 @@ QPushButton#primaryButton {
     background-color: #2fbf71;
     color: #0e1a12;
     border: none;
-    font-size: 18px;
+    font-size: 15px;
     font-weight: bold;
-    padding: 12px 18px;
+    padding: 8px 14px;
 }
 
 QPushButton#primaryButton:hover {
@@ -208,7 +208,7 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdi
 
 QLineEdit#searchInput {
     padding: 9px 12px;
-    font-size: 17px;
+    font-size: 14px;
 }
 
 QComboBox::drop-down {
@@ -316,7 +316,7 @@ QLabel#cartValue {
 
 QLabel#totalLabel {
     color: #0e1a12;
-    font-size: 20px;
+    font-size: 17px;
     font-weight: bold;
     background-color: #2fbf71;
     border-radius: 6px;
@@ -522,7 +522,7 @@ QLineEdit#loginName {
 }
 
 QLineEdit#pinDisplay {
-    font-size: 29px;
+    font-size: 22px;
     letter-spacing: 8px;
     color: #ffffff;
     background-color: #1a1e26;
@@ -541,7 +541,7 @@ QPushButton#pinKey {
     color: #e6e9ef;
     border: 1px solid #343b49;
     border-radius: 8px;
-    font-size: 23px;
+    font-size: 18px;
     font-weight: bold;
 }
 

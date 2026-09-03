@@ -315,7 +315,7 @@ class ProductWidget(QWidget):
         self.table.setColumnWidth(7, 50)
         self.table.setColumnWidth(8, 70)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(80)
+        self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
