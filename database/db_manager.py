@@ -184,6 +184,15 @@ CREATE TABLE IF NOT EXISTS credit_notes (
     FOREIGN KEY (sale_id) REFERENCES sales (id)
 );
 
+CREATE TABLE IF NOT EXISTS product_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    orden INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (product_id) REFERENCES products (id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_products_category ON products (category_id);
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);
 CREATE INDEX IF NOT EXISTS idx_sales_client ON sales (client_id);

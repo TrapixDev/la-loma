@@ -190,6 +190,7 @@ class ClientPickerDialog(QDialog):
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Identificación", "Nombre", "Correo", "Teléfono"])
+        self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setColumnWidth(0, 130)
         self.table.setColumnWidth(1, 260)
@@ -290,6 +291,7 @@ class ClientWidget(QWidget):
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Identificación", "Tipo", "Nombre", "Correo", "Teléfono"])
+        self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setColumnWidth(0, 130)
         self.table.setColumnWidth(1, 140)

@@ -3,8 +3,7 @@
 Preferencia (primera que funcione):
   1. DOCS_PATH de config.ini / Config (carpeta compartida en red, p. ej.
      \\\\SERVIDOR\\documentos): todas las cajas archivan en el mismo lugar.
-  2. Documentos/PosLaLoma (carpeta Documentos del usuario).
-  3. %APPDATA%\\PosLaLoma\\documentos (red caída / sin permiso).
+  2. %APPDATA%\\PosLaLoma\\documentos (fallback local centralizado).
 
 Estructura: <raíz>/Facturas/AAAA-MM/{invoice_number}_{AAAA-MM-DD}.xml (.pdf)
 """
@@ -14,24 +13,7 @@ from pathlib import Path
 
 from config import Config
 
-try:
-    from PyQt6.QtCore import QStandardPaths
-except Exception:  # pragma: no cover - entorno sin Qt al hacer imports aislados
-    QStandardPaths = None
-
 _FALLBACK_LOCAL: Path | None = None
-
-
-def _documents_root() -> Path:
-    if QStandardPaths is not None:
-        try:
-            root = QStandardPaths.writableLocation(
-                QStandardPaths.StandardLocation.DocumentsLocation)
-            if root:
-                return Path(root)
-        except Exception:
-            pass
-    return Path.home() / "Documents"
 
 
 def _fallback_root() -> Path:
@@ -53,7 +35,7 @@ def _red_accesible(carpeta: Path) -> bool:
 
 
 def facturas_root() -> Path:
-    """Raíz de respaldo: DOCS_PATH / Documentos\\PosLaLoma / APPDATA."""
+    """Raíz de respaldo: DOCS_PATH / APPDATA/documentos (fallback local)."""
     global _FALLBACK_LOCAL
     if _FALLBACK_LOCAL is not None:
         return _FALLBACK_LOCAL
@@ -61,7 +43,7 @@ def facturas_root() -> Path:
         compartida = Path(Config.DOCS_PATH)
         if _red_accesible(compartida):
             return compartida / "Facturas"
-    local = _documents_root() / "PosLaLoma" / "Facturas"
+    local = _fallback_root() / "Facturas"
     if _red_accesible(local):
         return local
     _FALLBACK_LOCAL = _fallback_root() / "Facturas"

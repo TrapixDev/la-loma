@@ -273,6 +273,20 @@ QHeaderView::section {
     font-weight: bold;
 }
 
+QHeaderView#tableHeader::section {
+    background-color: #1e232d;
+    color: #b9c2cf;
+    border: none;
+    border-bottom: 1px solid #2e3440;
+    padding: 8px;
+    font-weight: bold;
+}
+
+QTableCornerButton::section {
+    background-color: #1e232d;
+    border: none;
+}
+
 QTableWidget#cartTable {
     background-color: #12151b;
     color: #e6e9ef;

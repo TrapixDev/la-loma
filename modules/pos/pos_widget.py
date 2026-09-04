@@ -502,18 +502,21 @@ class POSWidget(QWidget):
             "clave": clave,
             "method": method,
             "print_requested": dialog.print_requested,
+            "print_printer": dialog.print_printer,
         }
 
         documents = self._generar_y_imprimir(
             sale_id, sale, payload, clave, method,
-            print_requested=result.get("print_requested", False))
+            print_requested=result.get("print_requested", False),
+            printer_name=result.get("print_printer", ""))
 
         self.sale_completed.emit(result)
 
         self._clear_cart()
 
     def _generar_y_imprimir(self, sale_id: int, sale, payload: dict, clave: str,
-                            method: str, print_requested: bool = False) -> dict:
+                            method: str, print_requested: bool = False,
+                            printer_name: str = "") -> dict:
         """Guarda XML+PDF en Documentos y ofrece imprimir la factura en físico.
 
         Nunca bloquea la venta: si falla, solo se avisa y se continúa.
@@ -549,7 +552,11 @@ class POSWidget(QWidget):
 
         if print_requested:
             try:
-                ok = imprimir_ticket_venta(saved, company, self.services["db"])
+                if printer_name:
+                    from modules.documentos.ticket import imprimir_ticket, ticket_html
+                    ok = imprimir_ticket(ticket_html(saved, company), printer_name)
+                else:
+                    ok = imprimir_ticket_venta(saved, company, self.services["db"])
             except Exception:
                 ok = False
             if not ok:

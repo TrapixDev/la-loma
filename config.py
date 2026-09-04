@@ -101,7 +101,7 @@ class Config:
 
     # Fotos de productos: se guardan en el servidor y se cachean en cada estación.
     PRODUCT_IMAGES_DIR = str(_data_dir() / "product_images")
-    IMAGE_CACHE_DIR = str(Path.home() / ".pos_la_loma" / "images")
+    IMAGE_CACHE_DIR = str(appdata_dir() / "cache" / "images")
     MAX_IMAGE_BYTES = 1_500_000
     IMAGE_MAX_SIDE = 400
 

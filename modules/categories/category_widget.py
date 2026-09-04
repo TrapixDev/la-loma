@@ -210,6 +210,7 @@ class CategoryWidget(QWidget):
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Foto", "Nombre", "Descripción", "Productos", "Estado"])
+        self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setColumnWidth(0, 70)
         self.table.setColumnWidth(1, 160)

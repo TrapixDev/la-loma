@@ -81,3 +81,76 @@ class ProductService:
             "WHERE id = ?",
             (product_id,),
         )
+
+    # ---------- galería de fotos ----------
+
+    def list_images(self, product_id: int) -> list[str]:
+        rows = self.db.execute_query(
+            "SELECT filename FROM product_images WHERE product_id = ? ORDER BY orden",
+            (product_id,),
+        )
+        return [row["filename"] for row in rows]
+
+    def add_image(self, product_id: int, filename: str) -> None:
+        self.db.execute_insert(
+            "INSERT INTO product_images (product_id, filename, orden) "
+            "VALUES (?, ?, (SELECT COALESCE(MAX(orden), 0) + 1 "
+            "FROM product_images WHERE product_id = ?))",
+            (product_id, filename, product_id),
+        )
+        # Si el producto no tiene portada, la primera foto lo es.
+        cover = self.db.execute_query(
+            "SELECT image_path FROM products WHERE id = ?", (product_id,))
+        if cover and not cover[0]["image_path"]:
+            self.set_cover(product_id, filename)
+
+    def remove_image(self, product_id: int, filename: str) -> None:
+        self.db.execute_update(
+            "DELETE FROM product_images WHERE product_id = ? AND filename = ?",
+            (product_id, filename),
+        )
+        self._fix_cover(product_id)
+
+    def set_cover(self, product_id: int, filename: str) -> None:
+        self.db.execute_update(
+            "UPDATE products SET image_path = ?, "
+            "updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (filename, product_id),
+        )
+        # Reordena: la portada pasa a ser la primera en la galería.
+        self.db.execute_update(
+            "UPDATE product_images SET orden = 0 WHERE product_id = ? AND filename = ?",
+            (product_id, filename),
+        )
+        rows = self.db.execute_query(
+            "SELECT id, filename FROM product_images WHERE product_id = ? "
+            "AND filename <> ? ORDER BY orden",
+            (product_id, filename),
+        )
+        for orden, row in enumerate(rows, start=1):
+            self.db.execute_update(
+                "UPDATE product_images SET orden = ? WHERE id = ?",
+                (orden, row["id"]),
+            )
+
+    def _fix_cover(self, product_id: int) -> None:
+        """Si se quitó la portada, toma la primera foto restante como nueva portada."""
+        cover = self.db.execute_query(
+            "SELECT image_path FROM products WHERE id = ?", (product_id,))
+        if cover and cover[0]["image_path"]:
+            still = self.db.execute_query(
+                "SELECT 1 FROM product_images WHERE product_id = ? AND filename = ?",
+                (product_id, cover[0]["image_path"]),
+            )
+            if still:
+                return
+        remaining = self.db.execute_query(
+            "SELECT filename FROM product_images WHERE product_id = ? ORDER BY orden",
+            (product_id,),
+        )
+        new_cover = remaining[0]["filename"] if remaining else ""
+        self.db.execute_update(
+            "UPDATE products SET image_path = ?, "
+            "updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (new_cover, product_id),
+        )

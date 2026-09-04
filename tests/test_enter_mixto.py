@@ -55,15 +55,19 @@ def test_enter_vacio_no_hace_nada():
     print("[OK] Enter con campo vacio no hace nada")
 
 
-def test_tarjeta_insuficiente_no_cambia_mixto():
+def test_tarjeta_insuficiente_cambia_mixto():
     dlg = CobroDialog(TOTAL)
     dlg._select_method("Tarjeta")
     dlg.cash_input.setText("50000")
     dlg.cash_input.returnPressed.emit()
-    assert dlg.method == "Tarjeta", "solo Efectivo dispara el cambio a Mixto"
-    assert dlg.pages.currentIndex() == 0
-    assert not dlg.cobrar_btn.isEnabled()
-    print("[OK] Tarjeta insuficiente no cambia a Mixto (solo Efectivo)")
+    assert dlg.method == "Mixto", f"Tarjeta insuficiente debe pasar a Mixto, quedo en {dlg.method}"
+    assert dlg.pages.currentIndex() == 1
+    assert dlg.mix_method_a.currentText() == "Tarjeta", \
+        f"metodo A debe ser Tarjeta, es {dlg.mix_method_a.currentText()}"
+    assert dlg._parse_amount(dlg.mix_amount_a.text()) == 50000.0, "monto de Tarjeta conservado"
+    assert dlg._parse_amount(dlg.mix_amount_b.text()) == 119500.0, \
+        f"faltante pre-llenado: {dlg.mix_amount_b.text()}"
+    print("[OK] Tarjeta insuficiente pasa a Mixto con Tarjeta como metodo A")
 
 
 def test_switch_mixto_y_enter_cobra():
@@ -102,7 +106,7 @@ if __name__ == "__main__":
         test_enter_insuficiente_switch_mixto,
         test_enter_suficiente_cobra_normal,
         test_enter_vacio_no_hace_nada,
-        test_tarjeta_insuficiente_no_cambia_mixto,
+        test_tarjeta_insuficiente_cambia_mixto,
         test_switch_mixto_y_enter_cobra,
         test_switch_mixto_respecta_moneda_usd,
     ]

@@ -3,7 +3,7 @@
 from dataclasses import fields as dataclass_fields
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -262,6 +263,232 @@ class ProductDialog(QDialog):
         self.accept()
 
 
+class ProductGalleryDialog(QDialog):
+    """Galería de fotos de un producto (varias imágenes por producto)."""
+
+    def __init__(self, services: dict, product, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.services = services
+        self.product = product
+        self.photos: list[str] = []
+        self.index = 0
+        self._block = False
+        self.setWindowTitle(f"Galería — {getattr(product, 'name', '')}")
+        self.setMinimumSize(560, 520)
+        self.setMaximumHeight(720)
+        self._setup_ui()
+        self._reload_photos()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        title = QLabel(f"Fotos de: {getattr(self.product, 'name', '')}")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setMinimumHeight(260)
+        self.image_label.setStyleSheet(
+            "border: 1px solid #2e3440; border-radius: 8px; background: #1a1f28;")
+        layout.addWidget(self.image_label, 1)
+
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+        prev_btn = QPushButton("←")
+        prev_btn.setObjectName("secondaryButton")
+        prev_btn.setFixedWidth(60)
+        prev_btn.clicked.connect(lambda: self._navigate(-1))
+        next_btn = QPushButton("→")
+        next_btn.setObjectName("secondaryButton")
+        next_btn.setFixedWidth(60)
+        next_btn.clicked.connect(lambda: self._navigate(1))
+        self.counter_label = QLabel("")
+        self.counter_label.setObjectName("formLabel")
+        self.counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav.addWidget(prev_btn)
+        nav.addStretch(1)
+        nav.addWidget(self.counter_label)
+        nav.addStretch(1)
+        nav.addWidget(next_btn)
+        layout.addLayout(nav)
+
+        self.thumbs_layout = QGridLayout()
+        self.thumbs_layout.setContentsMargins(0, 0, 0, 0)
+        self.thumbs_layout.setSpacing(8)
+        self._thumbs_container = QWidget()
+        self._thumbs_container.setLayout(self.thumbs_layout)
+        layout.addWidget(self._thumbs_container)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        add_btn = QPushButton("Añadir foto")
+        add_btn.setObjectName("primaryButton")
+        add_btn.clicked.connect(self._add_photo)
+        remove_btn = QPushButton("Quitar foto")
+        remove_btn.setObjectName("dangerButton")
+        remove_btn.clicked.connect(self._remove_photo)
+        cover_btn = QPushButton("Definir portada")
+        cover_btn.setObjectName("secondaryButton")
+        cover_btn.clicked.connect(self._set_cover)
+        action_row.addWidget(add_btn)
+        action_row.addWidget(remove_btn)
+        action_row.addWidget(cover_btn)
+        layout.addLayout(action_row)
+
+        close_btn = QPushButton("Cerrar")
+        close_btn.setObjectName("closeButton")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def _product_service(self):
+        return self.services["product"]
+
+    def _image_store(self):
+        return self.services.get("images")
+
+    def _reload_photos(self) -> None:
+        service = self._product_service()
+        store = self._image_store()
+        self.photos = service.list_images(self.product.id) if self.product.id else []
+        cover = getattr(self.product, "image_path", "") or ""
+        if cover and cover not in self.photos:
+            self.photos.insert(0, cover)
+        self.index = 0
+        self._render()
+
+    def _show_pixmap(self, filename: str) -> None:
+        store = self._image_store()
+        if store is None:
+            self._set_placeholder()
+            return
+        store.get_pixmap_async(filename, lambda pixmap, name=filename: self._apply_main(name, pixmap))
+
+    def _apply_main(self, filename: str, pixmap) -> None:
+        if filename != self._current_filename():
+            return
+        if pixmap is None:
+            self._set_placeholder()
+            return
+        scaled = pixmap.scaled(
+            560, 400,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.image_label.setPixmap(scaled)
+
+    def _current_filename(self) -> str:
+        if 0 <= self.index < len(self.photos):
+            return self.photos[self.index]
+        return ""
+
+    def _set_placeholder(self) -> None:
+        self.image_label.setPixmap(
+            ImageStore.placeholder_pixmap(getattr(self.product, "name", "") or "?", 300))
+
+    def _render(self) -> None:
+        # Limpia miniaturas
+        while self.thumbs_layout.count():
+            item = self.thumbs_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        if not self.photos:
+            self._set_placeholder()
+            self.counter_label.setText("Sin fotos")
+            return
+        self.counter_label.setText(f"{self.index + 1} / {len(self.photos)}")
+        self._show_pixmap(self._current_filename())
+        self._build_thumbs()
+
+    def _build_thumbs(self) -> None:
+        store = self._image_store()
+        row = 0
+        for i, filename in enumerate(self.photos):
+            box = QVBoxLayout()
+            box.setSpacing(2)
+            label = QPushButton()
+            label.setFixedSize(72, 72)
+            label.setObjectName("thumbnail")
+            label.setCheckable(True)
+            label.setChecked(i == self.index)
+            label.setStyleSheet(
+                "QPushButton#thumbnail { border: 2px solid #2e3440; border-radius: 6px;"
+                " padding: 2px; background: #1a1f28; }"
+                "QPushButton#thumbnail:checked { border-color: #2fbf71; }")
+            label.clicked.connect(lambda checked=False, idx=i: self._go_to(idx))
+            if store is not None:
+                store.get_pixmap_async(
+                    filename,
+                    lambda pixmap, btn=label: self._apply_thumb(btn, pixmap))
+            box.addWidget(label)
+            if self.index == i:
+                marker = QLabel("Portada" if i == 0 else "Actual")
+                marker.setObjectName("cartLabel")
+                marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                box.addWidget(marker)
+            self.thumbs_layout.addLayout(box, 0, row)
+            row += 1
+
+    def _apply_thumb(self, button, pixmap) -> None:
+        if pixmap is None:
+            return
+        scaled = pixmap.scaled(
+            68, 68,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        button.setIcon(QIcon(scaled))
+
+    def _go_to(self, index: int) -> None:
+        if 0 <= index < len(self.photos):
+            self.index = index
+            self._render()
+
+    def _navigate(self, step: int) -> None:
+        if not self.photos:
+            return
+        self.index = (self.index + step) % len(self.photos)
+        self._render()
+
+    def _add_photo(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Seleccionar foto", "",
+            "Imágenes (*.png *.jpg *.jpeg *.webp)")
+        if not path:
+            return
+        store = self._image_store()
+        if store is None:
+            QMessageBox.warning(self, "Fotos", "No hay acceso al almacén de imágenes.")
+            return
+        try:
+            filename = store.upload(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Fotos", f"No se pudo subir la foto:\n{exc}")
+            return
+        self._product_service().add_image(self.product.id, filename)
+        self._reload_photos()
+        self._go_to(len(self.photos) - 1)
+
+    def _remove_photo(self) -> None:
+        if not self.photos:
+            return
+        filename = self._current_filename()
+        store = self._image_store()
+        self._product_service().remove_image(self.product.id, filename)
+        if store is not None:
+            store.delete(filename)
+        self._reload_photos()
+
+    def _set_cover(self) -> None:
+        if not self.photos:
+            return
+        filename = self._current_filename()
+        self._product_service().set_cover(self.product.id, filename)
+        self._reload_photos()
+
+
 class ProductWidget(QWidget):
     data_changed = pyqtSignal()
 
@@ -304,6 +531,7 @@ class ProductWidget(QWidget):
         self.table.setHorizontalHeaderLabels(
             ["Foto", "Código", "Tipo de Madera", "Nombre", "Categoría", "Precio Venta", "Costo Fab.", "IVA", "Estado"]
         )
+        self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setColumnWidth(0, 70)
         self.table.setColumnWidth(1, 80)
@@ -319,7 +547,7 @@ class ProductWidget(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        self.table.doubleClicked.connect(self._edit_product)
+        self.table.doubleClicked.connect(self._open_gallery)
         layout.addWidget(self.table, 1)
 
     def _refresh_categories(self) -> None:
@@ -402,6 +630,20 @@ class ProductWidget(QWidget):
             self._refresh_categories()
             self.refresh()
             self.data_changed.emit()
+
+    def _open_gallery(self) -> None:
+        product = self._selected_product()
+        if product is None:
+            QMessageBox.information(self, "Selección", "Seleccione un producto.")
+            return
+        if not getattr(product, "id", 0):
+            QMessageBox.information(self, "Galería",
+                                    "Primero guarde el producto para añadirle fotos.")
+            return
+        dialog = ProductGalleryDialog(self.services, product, parent=self)
+        dialog.exec()
+        self.refresh()
+        self.data_changed.emit()
 
     def _edit_product(self) -> None:
         product = self._selected_product()

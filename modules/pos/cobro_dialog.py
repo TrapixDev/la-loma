@@ -1,6 +1,7 @@
 """Diálogo moderno de cobro con monto por método, Mixto y cambio en tiempo real."""
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtPrintSupport import QPrinterInfo
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -155,6 +156,53 @@ QFrame#separator {
 _METHODS = ("Efectivo", "Tarjeta", "Sinpe")
 
 
+class PrintDialog(QDialog):
+    """Diálogo para elegir la impresora antes de imprimir."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Imprimir")
+        self.setMinimumWidth(380)
+        self.setMinimumHeight(200)
+        self.selected_printer = ""
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        title = QLabel("Seleccione la impresora")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
+        self.printer_combo = NoWheelComboBox()
+        self.printer_combo.addItem("Predeterminada de Windows", "")
+        for _printer in QPrinterInfo.availablePrinters():
+            self.printer_combo.addItem(_printer.printerName(), _printer.printerName())
+        layout.addWidget(self.printer_combo)
+
+        hint = QLabel("Si su impresora no aparece, verifique que esté instalada en Windows.")
+        hint.setObjectName("subtitleLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        ok_btn = QPushButton("Imprimir")
+        ok_btn.setObjectName("successButton")
+        ok_btn.clicked.connect(self._accept_print)
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setObjectName("closeButton")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+    def _accept_print(self) -> None:
+        self.selected_printer = self.printer_combo.currentData()
+        self.accept()
+
+
 class CobroDialog(QDialog):
     """Diálogo de cobro con monto por método y opción de pago Mixto."""
 
@@ -170,6 +218,7 @@ class CobroDialog(QDialog):
         self.change = 0.0
         self.payment_details: list[dict] = []
         self.print_requested = False
+        self.print_printer = ""
         self.invoice_number = ""
         self._root: QVBoxLayout | None = None
         self.setObjectName("CobroDialog")
@@ -186,6 +235,7 @@ class CobroDialog(QDialog):
         field = QLineEdit()
         field.setObjectName("cashInput")
         field.setPlaceholderText("0")
+        field.setText("0")
         field.setAlignment(Qt.AlignmentFlag.AlignRight)
         return field
 
@@ -308,9 +358,10 @@ class CobroDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self.mix_method_a = QLabel("Efectivo")
-        self.mix_method_a.setObjectName("subtitleLabel")
-        self.mix_method_a.setFixedWidth(80)
+        self.mix_method_a = NoWheelComboBox()
+        self.mix_method_a.setObjectName("mixMethod")
+        self.mix_method_a.addItems(["Efectivo", "Tarjeta", "Sinpe"])
+        self.mix_method_a.setMinimumWidth(110)
         self.mix_amount_a = self._build_amount_field()
 
         self.mix_method_b = NoWheelComboBox()
@@ -359,6 +410,7 @@ class CobroDialog(QDialog):
         self.mix_amount_b.textChanged.connect(self._update_change)
         self.mix_amount_a.returnPressed.connect(self._on_cobrar)
         self.mix_amount_b.returnPressed.connect(self._on_cobrar)
+        self.mix_method_a.currentIndexChanged.connect(self._update_mix_method_b)
 
         layout.addStretch()
         return page
@@ -467,8 +519,9 @@ class CobroDialog(QDialog):
     def _mix_values(self) -> tuple[float, float, list[dict]]:
         amount_a = self._parse_amount(self.mix_amount_a.text())
         amount_b = self._parse_amount(self.mix_amount_b.text())
+        method_a = self.mix_method_a.currentText()
         method_b = self.mix_method_b.currentText()
-        details = [{"method": "Efectivo", "amount": amount_a},
+        details = [{"method": method_a, "amount": amount_a},
                    {"method": method_b, "amount": amount_b}]
         total_in = round(amount_a + amount_b, 2)
         change = max(0.0, total_in - self.total)
@@ -525,10 +578,22 @@ class CobroDialog(QDialog):
             return
         self._switch_to_mixto()
 
+    def _update_mix_method_b(self) -> None:
+        """Al cambiar el método A, refresca las opciones de B (sin duplicar)."""
+        current_a = self.mix_method_a.currentText()
+        current_b = self.mix_method_b.currentText()
+        others = [m for m in ("Efectivo", "Tarjeta", "Sinpe") if m != current_a]
+        self.mix_method_b.blockSignals(True)
+        self.mix_method_b.clear()
+        self.mix_method_b.addItems(others)
+        if current_b in others:
+            self.mix_method_b.setCurrentText(current_b)
+        self.mix_method_b.blockSignals(False)
+
     def _switch_to_mixto(self) -> None:
-        """Pasa a la página Mixto con el efectivo ingresado y el faltante
-        pre-llenado en el otro método (Tarjeta/Sinpe)."""
-        if self.method != "Efectivo":
+        """Pasa a la página Mixto con el monto ingresado del método actual y
+        el faltante pre-llenado en otro método."""
+        if self.method not in ("Efectivo", "Tarjeta", "Sinpe"):
             return
         cash = self._parse_cash()
         if cash <= 0:
@@ -536,9 +601,16 @@ class CobroDialog(QDialog):
         missing = round(self.total - cash, 2)
         if missing <= 0:
             return
+        # Método actual -> A; elige otro distinto para B.
+        origin_method = self.method
+        others = [m for m in ("Efectivo", "Tarjeta", "Sinpe") if m != origin_method]
         self.method = "Mixto"
         self.method_buttons["Mixto"].setChecked(True)
         self.pages.setCurrentIndex(1)
+        self.mix_method_a.blockSignals(True)
+        self.mix_method_a.setCurrentText(origin_method)
+        self.mix_method_a.blockSignals(False)
+        self._update_mix_method_b()
         self.mix_amount_a.setText(f"{cash:,.2f}")
         self.mix_amount_b.setText(f"{missing:,.2f}")
         self._update_change()
@@ -656,7 +728,11 @@ class CobroDialog(QDialog):
             self.setFixedHeight(600)
 
     def _on_print(self) -> None:
+        dialog = PrintDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
         self.print_requested = True
+        self.print_printer = dialog.selected_printer
         self.accept()
 
     def result(self) -> dict:
@@ -666,6 +742,7 @@ class CobroDialog(QDialog):
             "change": self.change,
             "payment_details": list(self.payment_details),
             "print_requested": self.print_requested,
+            "print_printer": self.print_printer,
             "currency": self.currency,
             "exchange_rate": self.exchange_rate,
             "total_crc": self.total_crc,
