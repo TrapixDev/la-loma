@@ -40,12 +40,44 @@ FORBIDDEN_PREFIXES = ("PRAGMA", "ATTACH", "DETACH", "VACUUM", "REINDEX",
 AUTH_HEADER = "Authorization"
 AUTH_PREFIX = "Bearer "
 DETAIL_MAX = 300
+
+# Política de tablas: los clientes solo pueden escribir tablas de negocio.
+# `users` queda fuera de todo DML (se administra con /api/login y /api/setup)
+# y las tablas contables no admiten DELETE (se anulan, no se borran).
+DML_ALLOWED_TABLES = {
+    "categories", "products", "clients", "sales", "sale_items", "expenses",
+    "expense_categories", "product_images", "counters", "app_config",
+    "hacienda_config", "credit_accounts", "credit_payments",
+    "credit_payment_images", "credit_notes", "audit_log",
+}
+DELETE_ALLOWED_TABLES = {
+    "categories", "products", "clients", "expenses", "expense_categories",
+    "product_images", "credit_accounts", "credit_payments",
+    "credit_payment_images", "credit_notes",
+}
+FORBIDDEN_SELECT_TABLES = {"users", "sqlite_master", "sqlite_schema"}
+_TABLE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")
 RATE_WINDOW_SECONDS = 600
 RATE_MAX_ATTEMPTS = 20
 
 
+def _statement_table(statement: str, keyword: str) -> str:
+    """Extrae el nombre de tabla que sigue a una palabra clave."""
+    rest = statement[len(keyword):].lstrip()
+    if keyword.upper().startswith("INSERT"):
+        rest = re.sub(r"^OR\s+[A-Za-z]+\s+", "", rest, flags=re.IGNORECASE)
+        rest = re.sub(r"^INTO\s+", "", rest, flags=re.IGNORECASE)
+    match = _TABLE_PATTERN.match(rest)
+    return match.group(1).lower() if match else ""
+
+
 def validate_sql(sql: str) -> str:
-    """Valida que el SQL sea una sola sentencia permitida y la devuelve limpia."""
+    """Valida que el SQL sea una sola sentencia permitida y la devuelve limpia.
+
+    Además del tipo de sentencia, aplica una allowlist de tablas: los clientes
+    no pueden leer `users` (hashes de PIN) ni escribir fuera de las tablas de
+    negocio, y no pueden borrar ventas ni registros contables.
+    """
     if not isinstance(sql, str):
         raise ValueError("SQL debe ser texto")
     statement = sql.strip()
@@ -60,6 +92,30 @@ def validate_sql(sql: str) -> str:
         raise ValueError(f"Operación no permitida: {upper.split()[0]}")
     if not any(upper.startswith(word) for word in ALLOWED_PREFIXES):
         raise ValueError("Solo se permiten SELECT, INSERT, UPDATE o DELETE")
+
+    if upper.startswith("SELECT"):
+        tables = {m.lower() for m in re.findall(
+            r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)",
+            statement, re.IGNORECASE)}
+        if tables & FORBIDDEN_SELECT_TABLES:
+            raise ValueError("Consulta a tabla no permitida")
+        return statement
+
+    if upper.startswith("DELETE FROM"):
+        table = _statement_table(statement, "DELETE FROM")
+        if table not in DELETE_ALLOWED_TABLES:
+            raise ValueError(f"DELETE no permitido en '{table or '?'}'")
+        return statement
+
+    if upper.startswith("UPDATE"):
+        table = _statement_table(statement, "UPDATE")
+        if table not in DML_ALLOWED_TABLES:
+            raise ValueError(f"UPDATE no permitido en '{table or '?'}'")
+        return statement
+
+    table = _statement_table(statement, "INSERT")
+    if table not in DML_ALLOWED_TABLES:
+        raise ValueError(f"INSERT no permitido en '{table or '?'}'")
     return statement
 
 
@@ -186,25 +242,36 @@ class Handler(BaseHTTPRequestHandler):
 
     def _audit(self, session: dict | None, event: str, detail: str = "") -> None:
         db = DatabaseManager(self.server.db_path)
-        db.audit(
-            (session or {}).get("user_id"),
-            (session or {}).get("user_name", "sistema"),
-            (session or {}).get("station", self.server.station),
-            event,
-            detail[:DETAIL_MAX],
-        )
+        try:
+            db.audit(
+                (session or {}).get("user_id"),
+                (session or {}).get("user_name", "sistema"),
+                (session or {}).get("station", self.server.station),
+                event,
+                detail[:DETAIL_MAX],
+            )
+        finally:
+            db.close()
 
     def _rate_limited(self) -> bool:
+        """True si la IP superó el máximo de intentos fallidos recientes."""
         ip = self.client_address[0]
         now = time.time()
         with self.server.state_lock:
             window = [t for t in self.server.login_attempts.get(ip, [])
                       if now - t < RATE_WINDOW_SECONDS]
-            if len(window) >= RATE_MAX_ATTEMPTS:
-                return True
+            self.server.login_attempts[ip] = window
+            return len(window) >= RATE_MAX_ATTEMPTS
+
+    def _register_rate_attempt(self) -> None:
+        """Cuenta solo intentos fallidos (los logins válidos no gastan cupo)."""
+        ip = self.client_address[0]
+        now = time.time()
+        with self.server.state_lock:
+            window = [t for t in self.server.login_attempts.get(ip, [])
+                      if now - t < RATE_WINDOW_SECONDS]
             window.append(now)
             self.server.login_attempts[ip] = window
-        return False
 
     def _run_query(self, connection: sqlite3.Connection, statement: str,
                    params: tuple) -> dict:
@@ -247,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/logout": self._logout,
             "/api/query": self._query,
             "/api/execute": self._execute,
+            "/api/audit": self._audit_event,
             "/api/tx/begin": self._tx_begin,
             "/api/tx/exec": self._tx_exec,
             "/api/tx/commit": self._tx_commit,
@@ -265,7 +333,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _health(self, payload: dict) -> None:
         db = DatabaseManager(self.server.db_path)
-        self._send_json({"ok": True, "users": db.count_users()})
+        try:
+            self._send_json({"ok": True, "users": db.count_users()})
+        finally:
+            db.close()
 
     # ---------- actualizaciones por red ----------
 
@@ -315,23 +386,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def _setup(self, payload: dict) -> None:
         db = DatabaseManager(self.server.db_path)
-        if db.count_users() > 0:
-            self._send_json({"error": "El PIN inicial ya fue creado"}, 400)
-            return
-        name = str(payload.get("name") or "Administrador").strip()[:80]
-        pin = str(payload.get("pin") or "")
-        if not auth.valid_pin(pin):
-            self._send_json({"error": "El PIN debe tener entre 4 y 6 dígitos"}, 400)
-            return
-        salt, digest = auth.hash_pin(pin)
-        db.execute_insert(
-            "INSERT INTO users (name, pin_salt, pin_hash) VALUES (?, ?, ?)",
-            (name, salt, digest),
-        )
-        user = db.execute_query("SELECT * FROM users ORDER BY id DESC LIMIT 1")[0]
-        token = self._create_session(user)
-        db.audit(user["id"], user["name"], self.server.station, "SETUP", "PIN inicial creado")
-        self._send_json({"token": token, "user_id": user["id"], "user_name": user["name"]})
+        try:
+            if db.count_users() > 0:
+                self._send_json({"error": "El PIN inicial ya fue creado"}, 400)
+                return
+            name = str(payload.get("name") or "Administrador").strip()[:80]
+            pin = str(payload.get("pin") or "")
+            if not auth.valid_pin(pin):
+                self._send_json({"error": "El PIN debe tener entre 4 y 6 dígitos"}, 400)
+                return
+            salt, digest = auth.hash_pin(pin)
+            db.execute_insert(
+                "INSERT INTO users (name, pin_salt, pin_hash) VALUES (?, ?, ?)",
+                (name, salt, digest),
+            )
+            user = db.execute_query("SELECT * FROM users ORDER BY id DESC LIMIT 1")[0]
+            token = self._create_session(user)
+            db.audit(user["id"], user["name"], self.server.station, "SETUP",
+                     "PIN inicial creado")
+            self._send_json({
+                "token": token, "user_id": user["id"], "user_name": user["name"],
+            })
+        finally:
+            db.close()
 
     def _create_session(self, user: sqlite3.Row) -> str:
         token = auth.new_token()
@@ -364,36 +441,42 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "PIN inválido"}, 400)
             return
         db = DatabaseManager(self.server.db_path)
-        users = db.execute_query("SELECT * FROM users WHERE active = 1")
-        user = None
-        for candidate in users:
-            if auth.verify_pin(pin, candidate["pin_salt"], candidate["pin_hash"]):
-                user = candidate
-                break
-        if user is None:
-            self._register_login_failure(ip, now)
-            db.audit(None, "desconocido", self.server.station, "LOGIN_FAIL", "PIN incorrecto")
-            self._send_json({"error": "PIN incorrecto"}, 401)
-            return
-        if user["locked_until"] and auth.remaining_minutes(user["locked_until"]) > 0:
-            minutes = auth.remaining_minutes(user["locked_until"])
-            self._send_json(
-                {"error": f"Usuario bloqueado. Intente en {minutes} min."}, 423)
-            return
-        token = self._create_session(user)
-        with self.server.state_lock:
-            self.server.login_failures.pop(ip, None)
-        db.execute_update(
-            "UPDATE users SET failed_attempts = 0, locked_until = NULL, "
-            "last_login_at = datetime('now', 'localtime') WHERE id = ?",
-            (user["id"],),
-        )
-        db.audit(user["id"], user["name"], self.server.station, "LOGIN_OK")
-        self._send_json({
-            "token": token,
-            "user_id": user["id"],
-            "user_name": user["name"],
-        })
+        try:
+            users = db.execute_query("SELECT * FROM users WHERE active = 1")
+            user = None
+            for candidate in users:
+                if auth.verify_pin(pin, candidate["pin_salt"], candidate["pin_hash"]):
+                    user = candidate
+                    break
+            if user is None:
+                self._register_rate_attempt()
+                self._register_login_failure(ip, now)
+                db.audit(None, "desconocido", self.server.station,
+                         "LOGIN_FAIL", "PIN incorrecto")
+                self._send_json({"error": "PIN incorrecto"}, 401)
+                return
+            if user["locked_until"] and auth.remaining_minutes(user["locked_until"]) > 0:
+                minutes = auth.remaining_minutes(user["locked_until"])
+                self._send_json(
+                    {"error": f"Usuario bloqueado. Intente en {minutes} min."}, 423)
+                return
+            token = self._create_session(user)
+            with self.server.state_lock:
+                self.server.login_failures.pop(ip, None)
+                self.server.login_attempts.pop(ip, None)
+            db.execute_update(
+                "UPDATE users SET failed_attempts = 0, locked_until = NULL, "
+                "last_login_at = datetime('now', 'localtime') WHERE id = ?",
+                (user["id"],),
+            )
+            db.audit(user["id"], user["name"], self.server.station, "LOGIN_OK")
+            self._send_json({
+                "token": token,
+                "user_id": user["id"],
+                "user_name": user["name"],
+            })
+        finally:
+            db.close()
 
     def _register_login_failure(self, ip: str, now: float) -> None:
         with self.server.state_lock:
@@ -411,6 +494,16 @@ class Handler(BaseHTTPRequestHandler):
             with self.server.state_lock:
                 self.server.sessions.pop(token, None)
             self._audit(session, "LOGOUT")
+        self._send_json({"ok": True})
+
+    def _audit_event(self, payload: dict) -> None:
+        """Registra un evento de auditoría enviado por una estación."""
+        session = self._require_auth()
+        if session is None:
+            return
+        event = str(payload.get("event") or "EVENTO").strip()[:80] or "EVENTO"
+        detail = str(payload.get("detail") or "")
+        self._audit(session, event, detail)
         self._send_json({"ok": True})
 
     def _query(self, payload: dict) -> None:

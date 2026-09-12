@@ -13,7 +13,7 @@ Python + PyQt6, base SQLite, servidor local para varias cajas (LAN).
 - Reimpresión y anulación de ventas, notas de crédito, reportes (ingresos,
   ganancias, gastos), clientes, productos con fotos, categorías.
 - Varias cajas conectadas a un **servidor central** por HTTP local
-  (transacciones atómicas, idempotencia de ventas, stock concurrente seguro).
+  (transacciones atómicas, idempotencia de ventas).
 - **Respaldos automáticos** (BD + fotos) cada 6 h, se conservan 14.
 - **Actualizaciones por red local**: el servidor sirve el setup nuevo y las
   cajas lo descargan e instalan sin internet.
@@ -75,9 +75,8 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
 - `utils/arranque.py`: en modo .exe migra `data\` (USB) a `%APPDATA%` la
   primera vez.
 - Ventas: cada venta lleva `sale_reference` único (UUID) con índice UNIQUE →
-  reintentar tras perder la red no duplica. El stock se descuenta con
-  `UPDATE ... WHERE stock_quantity >= ?` dentro de la transacción → dos cajas
-  no pueden vender el último producto a la vez.
+  reintentar tras perder la red no duplica. El stock no se controla: se
+  fabrica a pedido, por lo que un producto puede venderse con existencias en 0.
 
 ## Seguridad (para producción)
 
@@ -98,4 +97,4 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
 ## Versiones
 
 - 1.0.0 — release inicial del instalador (USD, impresoras, tickets, exención,
-  carpeta compartida, actualizaciones LAN, idempotencia, stock concurrente).
+  carpeta compartida, actualizaciones LAN, idempotencia).

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from config import Config
 from modules.categories.category_widget import CategoryWidget
 from modules.clients.client_widget import ClientWidget
+from modules.credit.credit_widget import CreditWidget
 from modules.pos.pos_widget import POSWidget
 from modules.products.product_widget import ProductWidget
 from modules.reports.reports_widget import ReportsWidget
@@ -27,6 +28,7 @@ from ui.login_dialog import LoginDialog
 
 NAV_ITEMS = [
     ("Punto de Venta", "pos"),
+    ("Crédito", "credit"),
     ("Categorías", "categories"),
     ("Productos", "products"),
     ("Clientes", "clients"),
@@ -103,6 +105,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.pos_widget = POSWidget(self.services)
+        self.credit_widget = CreditWidget(self.services)
         self.category_widget = CategoryWidget(self.services)
         self.product_widget = ProductWidget(self.services)
         self.client_widget = ClientWidget(self.services)
@@ -111,6 +114,7 @@ class MainWindow(QMainWindow):
         self.page_keys = [key for _, key in NAV_ITEMS]
         for widget in (
             self.pos_widget,
+            self.credit_widget,
             self.category_widget,
             self.product_widget,
             self.client_widget,
@@ -146,6 +150,9 @@ class MainWindow(QMainWindow):
         self.category_widget.data_changed.connect(self.product_widget.refresh)
         self.product_widget.data_changed.connect(self.pos_widget.refresh_products)
         self.product_widget.data_changed.connect(self.category_widget.refresh)
+        self.credit_widget.data_changed.connect(self.pos_widget.refresh_products)
+        self.credit_widget.data_changed.connect(self.product_widget.refresh)
+        self.credit_widget.data_changed.connect(self.reports_widget.refresh)
 
     def _set_page(self, key: str) -> None:
         try:
@@ -153,6 +160,8 @@ class MainWindow(QMainWindow):
         except ValueError:
             return
         self.pages.setCurrentIndex(index)
+        if key == "credit":
+            self.credit_widget.refresh()
         if key == "reports":
             self.reports_widget.refresh()
         if key == "settings":

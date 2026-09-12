@@ -20,7 +20,13 @@ class CartService:
     def __init__(self, db: DatabaseManager):
         self.db = db
 
-    def create_sale(self, sale: Sale, items: list[SaleItem]) -> int:
+    def create_sale(self, sale: Sale, items: list[SaleItem],
+                    credit_notes: str | None = None) -> int:
+        """Registra una venta.
+
+        Si `credit_notes` no es None y la venta es a crédito, crea la cuenta
+        por cobrar dentro de la misma transacción (venta + cuenta atómicas).
+        """
         reference = getattr(sale, "sale_reference", "") or ""
         if reference:
             # Idempotencia: si la venta ya quedó registrada (p. ej. se perdió
@@ -87,6 +93,17 @@ class CartService:
                     (sale_id, item.product_id, item.product_name, item.quantity,
                      item.unit_price, unit_cost, item.discount, item.tax_amount, item.total),
                 )
+            if (credit_notes is not None
+                    and (sale.payment_method or "").lower() == "credito"
+                    and sale.client_id):
+                total = float(sale.total or 0)
+                connection.execute(
+                    "INSERT INTO credit_accounts (sale_id, client_id, invoice_number, "
+                    "total, amount_paid, balance, status, notes) "
+                    "VALUES (?, ?, ?, ?, 0, ?, 'pendiente', ?)",
+                    (sale_id, sale.client_id, invoice_number, total, total,
+                     credit_notes),
+                )
         return sale_id
 
     def get_sale(self, sale_id: int) -> Sale | None:
@@ -134,6 +151,14 @@ class CartService:
                     "UPDATE sales SET status = 'anulada', excluir_reporte = ? "
                     "WHERE id = ?",
                     (excluir, sale_id),
+                )
+                # La cuenta por cobrar asociada queda anulada con saldo 0 para
+                # que no siga sumando en los pendientes; se conserva el historial.
+                connection.execute(
+                    "UPDATE credit_accounts SET status = 'anulada', balance = 0, "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE sale_id = ? AND status <> 'anulada'",
+                    (sale_id,),
                 )
         except Exception:
             return False

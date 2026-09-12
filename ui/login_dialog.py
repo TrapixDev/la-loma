@@ -1,5 +1,6 @@
 """Diálogo de ingreso del POS: teclado PIN táctil y primer arranque."""
 
+import time
 from contextlib import contextmanager
 
 from PyQt6.QtCore import Qt
@@ -31,6 +32,8 @@ class LocalAuth:
 
     def __init__(self, db) -> None:
         self.db = db
+        self._failed_attempts = 0
+        self._locked_until = 0.0
 
     # ---------- interfaz DatabaseManager ----------
 
@@ -66,6 +69,10 @@ class LocalAuth:
         return self.db.count_users() == 0
 
     def login(self, pin: str) -> dict:
+        now = time.time()
+        if self._locked_until > now:
+            minutes = int((self._locked_until - now) // 60) + 1
+            return {"error": f"Demasiados intentos. Intente en {minutes} min."}
         users = self.db.execute_query("SELECT * FROM users WHERE active = 1")
         user = None
         for candidate in users:
@@ -73,10 +80,18 @@ class LocalAuth:
                 user = candidate
                 break
         if user is None:
-            return {"error": "PIN incorrecto"}
+            self._failed_attempts += 1
+            if self._failed_attempts >= MAX_FAILED:
+                self._locked_until = now + 15 * 60
+                self._failed_attempts = 0
+                return {"error": "Demasiados intentos. Bloqueado 15 minutos."}
+            return {"error": f"PIN incorrecto. Intento "
+                             f"{self._failed_attempts} de {MAX_FAILED}."}
         if user["locked_until"] and auth.remaining_minutes(user["locked_until"]) > 0:
             return {"error": f"Usuario bloqueado. Intente en "
                              f"{auth.remaining_minutes(user['locked_until'])} min."}
+        self._failed_attempts = 0
+        self._locked_until = 0.0
         self.db.execute_update(
             "UPDATE users SET failed_attempts = 0, locked_until = NULL, "
             "last_login_at = datetime('now', 'localtime') WHERE id = ?",
@@ -84,25 +99,6 @@ class LocalAuth:
         )
         session.set("local", user["id"], user["name"])
         return {"user_id": user["id"], "user_name": user["name"]}
-
-    def register_failure(self, pin: str) -> str:
-        users = self.db.execute_query("SELECT * FROM users WHERE active = 1")
-        for candidate in users:
-            if auth.verify_pin(pin, candidate["pin_salt"], candidate["pin_hash"]):
-                failed = int(candidate["failed_attempts"] or 0) + 1
-                if failed >= MAX_FAILED:
-                    deadline = auth.lockout_deadline(MAX_FAILED, 15)
-                    self.db.execute_update(
-                        "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?",
-                        (failed, deadline.isoformat(), candidate["id"]),
-                    )
-                    return f"Demasiados intentos. Bloqueado 15 minutos."
-                self.db.execute_update(
-                    "UPDATE users SET failed_attempts = ? WHERE id = ?",
-                    (failed, candidate["id"]),
-                )
-                return f"PIN incorrecto. Intento {failed} de {MAX_FAILED}."
-        return "PIN incorrecto"
 
     def setup(self, name: str, pin: str) -> dict:
         salt, digest = auth.hash_pin(pin)
@@ -245,10 +241,7 @@ class LoginDialog(QDialog):
             self._clear_pin()
             return
         if "error" in result:
-            message = result["error"]
-            if "incorrecto" in message.lower() and hasattr(self.db, "register_failure"):
-                message = self.db.register_failure(pin)
-            self._show_error(message)
+            self._show_error(result["error"])
             self._clear_pin()
             return
         self.accept()

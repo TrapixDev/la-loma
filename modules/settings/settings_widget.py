@@ -384,14 +384,6 @@ class SettingsWidget(QWidget):
                     return
             except Exception:
                 pass
-            try:
-                rows = db.execute_query("SELECT key, value FROM hacienda_config") or []
-                config = {str(row["key"]): row["value"] for row in rows}
-                if config:
-                    self._apply_config(config)
-                    return
-            except Exception:
-                pass
         if self.memory_config:
             self._apply_config(self.memory_config)
 

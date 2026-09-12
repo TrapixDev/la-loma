@@ -144,8 +144,10 @@ def test_reports_convert_usd():
         "INSERT INTO products (code, name, sale_price, stock_quantity) VALUES (?, ?, ?, ?)",
         ("PROD004", "Test CRC", 52000.0, 10)
     )
-    sale = Sale(subtotal=100.0, total=100.0, currency="USD", exchange_rate=520.0, status="completada", station="CAJA1")
-    item = SaleItem(product_id=1, product_name="Test USD", quantity=1, unit_price=100.0, total=100.0)
+    # POS guarda los montos en CRC aunque el cobro se muestre en USD; los
+    # reportes no deben reconvertir (evita inflar la venta x520).
+    sale = Sale(subtotal=52000.0, total=52000.0, currency="USD", exchange_rate=520.0, status="completada", station="CAJA1")
+    item = SaleItem(product_id=1, product_name="Test USD", quantity=1, unit_price=52000.0, total=52000.0)
     cs.create_sale(sale, [item])
     sale2 = Sale(subtotal=52000.0, total=52000.0, currency="CRC", exchange_rate=520.0, status="completada", station="CAJA1")
     item2 = SaleItem(product_id=2, product_name="Test CRC", quantity=1, unit_price=52000.0, total=52000.0)
@@ -208,6 +210,30 @@ def test_toggle_currency_en_mixto_convierte_ambos():
     assert ok
 
 
+def test_pdf_convierte_pago_usd_a_crc():
+    from modules.documentos.pdf_factura import factura_html
+    db = get_db()
+    cs = CartService(db)
+    db.execute_insert(
+        "INSERT INTO products (code, name, sale_price) VALUES (?, ?, ?)",
+        ("PROD005", "USD PDF", 52000.0),
+    )
+    sale = Sale(subtotal=52000.0, total=52000.0, currency="USD", exchange_rate=520.0,
+                payment_method="efectivo", cash_received=100.0, change_amount=0.0,
+                payment_details="[]", status="completada", station="CAJA1")
+    item = SaleItem(product_id=1, product_name="USD PDF", quantity=1,
+                    unit_price=52000.0, total=52000.0)
+    sale_id = cs.create_sale(sale, [item])
+    saved = cs.get_sale(sale_id)
+    html = factura_html(saved, {"company_name": "POS", "address": "", "phone": "",
+                                "company_id": "", "activity_code": ""})
+    ok = "₡52,000.00" in html and "₡100.00" not in html
+    print(f"[{'OK' if ok else 'FAIL'}] PDF convierte pago USD a CRC")
+    db.close()
+    cleanup()
+    assert ok
+
+
 if __name__ == "__main__":
     tests = [
         test_sales_columns_exist,
@@ -220,6 +246,7 @@ if __name__ == "__main__":
         test_exchange_rate_save_load,
         test_toggle_currency_resta_montos,
         test_toggle_currency_en_mixto_convierte_ambos,
+        test_pdf_convierte_pago_usd_a_crc,
     ]
     failed = 0
     for t in tests:

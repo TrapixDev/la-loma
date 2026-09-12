@@ -4,7 +4,7 @@ QSS_MAIN = """
 * {
     font-family: 'Segoe UI', 'Noto Sans', sans-serif;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: bold;
     outline: none;
 }
 
@@ -27,7 +27,7 @@ QWidget#headerBar {
 
 QLabel#appTitle {
     color: #ffffff;
-    font-size: 19px;
+    font-size: 20px;
     font-weight: bold;
     padding-left: 14px;
 }
@@ -39,7 +39,7 @@ QPushButton#navButton {
     border-radius: 6px;
     padding: 8px 14px;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: bold;
 }
 
 QPushButton#navButton:hover {
@@ -51,6 +51,7 @@ QPushButton#navButton:checked {
     background-color: #2fbf71;
     color: #0e1a12;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QPushButton {
@@ -59,7 +60,7 @@ QPushButton {
     border: 1px solid #343b49;
     border-radius: 6px;
     padding: 8px 14px;
-    font-weight: 500;
+    font-weight: bold;
 }
 
 QPushButton:hover {
@@ -81,7 +82,7 @@ QPushButton#primaryButton {
     background-color: #2fbf71;
     color: #0e1a12;
     border: none;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: bold;
     padding: 8px 14px;
 }
@@ -126,6 +127,7 @@ QPushButton#paymentButton:checked {
     border-color: #3b82f6;
     color: #ffffff;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QPushButton#invoiceToggle {
@@ -146,6 +148,7 @@ QPushButton#invoiceToggle:checked {
     border-color: #f59e0b;
     color: #1c1205;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QWidget#productCard {
@@ -172,12 +175,12 @@ QLabel#productCardImage {
 QLabel#productCardName {
     color: #e6e9ef;
     font-size: 14px;
-    font-weight: 500;
+    font-weight: bold;
 }
 
 QLabel#productCardPrice {
     color: #2fbf71;
-    font-size: 16px;
+    font-size: 17px;
     font-weight: bold;
 }
 
@@ -271,6 +274,7 @@ QHeaderView::section {
     border-bottom: 1px solid #2e3440;
     padding: 8px;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QHeaderView#tableHeader::section {
@@ -280,6 +284,7 @@ QHeaderView#tableHeader::section {
     border-bottom: 1px solid #2e3440;
     padding: 8px;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QTableCornerButton::section {
@@ -314,13 +319,13 @@ QWidget#cartPanel {
 
 QLabel#cartPanelTitle {
     color: #ffffff;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: bold;
 }
 
 QLabel#cartLabel {
     color: #8b93a3;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 QLabel#cartValue {
@@ -330,7 +335,7 @@ QLabel#cartValue {
 
 QLabel#totalLabel {
     color: #0e1a12;
-    font-size: 17px;
+    font-size: 18px;
     font-weight: bold;
     background-color: #2fbf71;
     border-radius: 6px;
@@ -339,13 +344,18 @@ QLabel#totalLabel {
 
 QLabel#sectionTitle {
     color: #eef2f8;
-    font-size: 18px;
+    font-size: 19px;
     font-weight: bold;
+}
+
+QLabel#subtitleLabel {
+    color: #9aa4b2;
+    font-size: 13px;
 }
 
 QLabel#statusValue {
     color: #eef2f8;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: bold;
 }
 
@@ -449,6 +459,7 @@ QGroupBox::title {
     padding: 0 6px;
     color: #c9d1dd;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QToolTip {
@@ -511,7 +522,7 @@ QDialog#loginDialog {
 
 QLabel#loginTitle {
     color: #ffffff;
-    font-size: 27px;
+    font-size: 28px;
     font-weight: bold;
 }
 
@@ -555,7 +566,7 @@ QPushButton#pinKey {
     color: #e6e9ef;
     border: 1px solid #343b49;
     border-radius: 8px;
-    font-size: 18px;
+    font-size: 19px;
     font-weight: bold;
 }
 
@@ -573,7 +584,7 @@ QPushButton#pinOk {
     color: #0e1a12;
     border: none;
     border-radius: 8px;
-    font-size: 21px;
+    font-size: 22px;
     font-weight: bold;
 }
 
@@ -624,12 +635,18 @@ QPushButton#periodToggle:checked {
     border-color: #2fbf71;
     color: #0e1a12;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QFrame#statCard {
-    background-color: #1e222b;
-    border: 1px solid #2a2f3a;
-    border-radius: 10px;
+    background-color: #1b2030;
+    border: 1px solid #2e3440;
+    border-radius: 8px;
+}
+
+QFrame#separator {
+    background-color: #2e3440;
+    max-height: 1px;
 }
 
 QLabel#statTitle {
@@ -639,7 +656,7 @@ QLabel#statTitle {
 
 QLabel#statValue {
     color: #ffffff;
-    font-size: 21px;
+    font-size: 22px;
     font-weight: bold;
 }
 
@@ -658,6 +675,7 @@ QPushButton#expenseButton {
     border-radius: 6px;
     padding: 7px 16px;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QPushButton#expenseButton:hover {
@@ -685,7 +703,7 @@ QGroupBox#settingsGroup::title {
     padding: 0 8px;
     background-color: #1e222b;
     color: #eef2f8;
-    font-size: 16px;
+    font-size: 17px;
     font-weight: bold;
 }
 
@@ -723,6 +741,7 @@ QPushButton#testButton {
     color: #ffffff;
     border: none;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QPushButton#testButton:hover {

@@ -63,6 +63,7 @@ from database.db_manager import DatabaseManager
 from database.seed import seed_initial_data
 from modules.categories.category_service import CategoryService
 from modules.clients.client_service import ClientService
+from modules.credit.credit_service import CreditService
 from modules.expenses.expense_service import ExpenseService
 from modules.hacienda.hacienda_client import HaciendaClient
 from modules.pos.cart_service import CartService
@@ -84,6 +85,7 @@ def build_services(db) -> dict:
         "product": ProductService(db),
         "client": ClientService(db),
         "cart": CartService(db),
+        "credit": CreditService(db),
         "expenses": ExpenseService(db),
         "reports": ReportsService(db),
         "hacienda": HaciendaClient(),

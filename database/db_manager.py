@@ -193,12 +193,56 @@ CREATE TABLE IF NOT EXISTS product_images (
     FOREIGN KEY (product_id) REFERENCES products (id)
 );
 
+CREATE TABLE IF NOT EXISTS credit_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL REFERENCES sales(id),
+    client_id INTEGER NOT NULL REFERENCES clients(id),
+    invoice_number TEXT NOT NULL,
+    total REAL NOT NULL DEFAULT 0,
+    amount_paid REAL NOT NULL DEFAULT 0,
+    balance REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pendiente',
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS credit_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    credit_account_id INTEGER NOT NULL REFERENCES credit_accounts(id),
+    amount REAL NOT NULL,
+    payment_method TEXT NOT NULL DEFAULT 'efectivo',
+    payment_details TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    payment_reference TEXT,
+    user_id INTEGER,
+    user_name TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS credit_payment_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    payment_id INTEGER NOT NULL REFERENCES credit_payments(id),
+    image_path TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    is_cover INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_products_category ON products (category_id);
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);
 CREATE INDEX IF NOT EXISTS idx_sales_client ON sales (client_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_reference ON sales (sale_reference);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses (expense_date);
+CREATE INDEX IF NOT EXISTS idx_credit_accounts_sale ON credit_accounts (sale_id);
+CREATE INDEX IF NOT EXISTS idx_credit_accounts_client ON credit_accounts (client_id);
+CREATE INDEX IF NOT EXISTS idx_credit_accounts_status ON credit_accounts (status);
+CREATE INDEX IF NOT EXISTS idx_credit_payments_account ON credit_payments (credit_account_id);
+CREATE INDEX IF NOT EXISTS idx_credit_payment_images ON credit_payment_images (payment_id);
+CREATE INDEX IF NOT EXISTS idx_sales_created ON sales (created_at);
+CREATE INDEX IF NOT EXISTS idx_credit_notes_sale ON credit_notes (sale_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses (category);
 """
 
 
@@ -264,6 +308,14 @@ class DatabaseManager:
         category_columns = {row["name"] for row in connection.execute("PRAGMA table_info(categories)")}
         if "image_path" not in category_columns:
             connection.execute("ALTER TABLE categories ADD COLUMN image_path TEXT")
+        payment_columns = {row["name"] for row in connection.execute("PRAGMA table_info(credit_payments)")}
+        if payment_columns and "payment_reference" not in payment_columns:
+            connection.execute("ALTER TABLE credit_payments ADD COLUMN payment_reference TEXT")
+        if payment_columns:
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_payments_reference "
+                "ON credit_payments (payment_reference)"
+            )
         duplicates = connection.execute(
             "SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL "
             "GROUP BY invoice_number HAVING COUNT(*) > 1"

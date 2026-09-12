@@ -1,5 +1,6 @@
 """Reportes mensuales y anuales (2026-2040) ligados a ventas y gastos."""
 
+import calendar
 import csv
 from datetime import date, datetime, timedelta
 
@@ -210,6 +211,13 @@ class NotaCreditoDialog(QDialog):
         if self.monto_input.value() <= 0:
             QMessageBox.warning(self, "Monto inválido", "Ingrese un monto mayor a cero.")
             return
+        sale_total = float(self.sale.get("total") or 0)
+        if self.monto_input.value() > sale_total:
+            QMessageBox.warning(
+                self, "Monto inválido",
+                f"El monto no puede superar el total de la factura "
+                f"({format_currency(sale_total)}).")
+            return
 
         code = self.motivo_combo.currentData()
         sale_id = int(self.sale.get("id") or 0)
@@ -238,7 +246,8 @@ class NotaCreditoDialog(QDialog):
         cliente = self.services["client"].get_by_id(sale.client_id) if sale.client_id \
             else None
 
-        consecutivo = self._next_consecutivo()
+        numero = self.services["reports"].reserve_credit_note_number()
+        consecutivo = str(numero).zfill(10)
         referencia = {
             "tipo_doc": "01",
             "numero": getattr(sale, "hacienda_key", "") or "",
@@ -253,7 +262,7 @@ class NotaCreditoDialog(QDialog):
             else ("", "PENDIENTE")
 
         nota = {
-            "invoice_number": f"NC-{int(consecutivo or 0):05d}",
+            "invoice_number": f"NC-{numero:05d}",
             "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "razon": detalle,
             "motivo": detalle,
@@ -266,17 +275,9 @@ class NotaCreditoDialog(QDialog):
 
         nota_id = self.services["reports"].create_credit_note(
             sale_id, detalle, detalle, codigo=code,
-            total=self.monto_input.value(), clave=clave, estado=estado)
+            total=self.monto_input.value(), clave=clave, estado=estado,
+            numero=numero)
         return clave, nota_id
-
-    def _next_consecutivo(self) -> str:
-        db = self.services.get("db")
-        try:
-            rows = db.execute_query(
-                "SELECT value FROM counters WHERE name = 'credit_note'")
-            return str((int(rows[0]["value"]) if rows else 0) + 1).zfill(10)
-        except Exception:
-            return "1".zfill(10)
 
     def _enviar(self, payload: dict) -> tuple[str, str]:
         """Envía la nota al proveedor FE. Devuelve (clave, estado) best-effort."""
@@ -342,7 +343,10 @@ class MovimientosDiaDialog(QDialog):
 
         color = {
             "VENTA": QColor(34, 197, 94),
+            "CRÉDITO": QColor(245, 158, 11),
+            "ABONO": QColor(59, 130, 246),
             "GASTO": QColor(249, 115, 22),
+            "NOTA": QColor(239, 68, 68),
         }
         for row_index, m in enumerate(movimientos):
             tipo = m["tipo"]
@@ -470,8 +474,7 @@ class ReportsWidget(QWidget):
         for key, title_text in (
             ("sale_count", "Ventas"),
             ("ingresos", "Ingresos"),
-            ("cost", "Costo de fabricación"),
-            ("expenses", "Gastos"),
+            ("egresos", "Costo + Gastos"),
             ("net_profit", "Ganancia"),
         ):
             frame = QFrame()
@@ -490,7 +493,7 @@ class ReportsWidget(QWidget):
 
         self.stack = QStackedWidget()
         self.daily_table = self._make_table(
-            ["Día", "Ventas", "Ingresos", "Costo fab.", "Gastos", "Ganancia"])
+            ["Día", "Ventas", "Ingresos", "Egresos", "Ganancia"])
         self.sales_table = self._make_table(
             ["N°", "Fecha", "Cliente", "Total", "Pago", "Hacienda", "Estado"])
         self.sales_table.itemSelectionChanged.connect(self._update_action_buttons)
@@ -503,7 +506,7 @@ class ReportsWidget(QWidget):
         self.stack.addWidget(self.month_page)
 
         self.monthly_table = self._make_table(
-            ["Mes", "Ventas", "Ingresos", "Costo fab.", "Gastos", "Ganancia"])
+            ["Mes", "Ventas", "Ingresos", "Egresos", "Ganancia"])
         self.category_table = self._make_table(["Categoría", "N°", "Total"])
         self.year_page = QWidget()
         year_layout = QVBoxLayout(self.year_page)
@@ -530,7 +533,8 @@ class ReportsWidget(QWidget):
         year = int(self.year_combo.currentData())
         if self.month_button.isChecked():
             month = int(self.month_combo.currentData())
-            return f"{year}-{month:02d}-01", f"{year}-{month:02d}-31"
+            last_day = calendar.monthrange(year, month)[1]
+            return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day:02d}"
         return f"{year}-01-01", f"{year}-12-31"
 
     def refresh(self) -> None:
@@ -558,7 +562,7 @@ class ReportsWidget(QWidget):
     def _update_cards(self) -> None:
         summary = self._data.get("summary", {})
         self.card_labels["sale_count"].setText(str(summary.get("sale_count", 0)))
-        for key in ("ingresos", "cost", "expenses"):
+        for key in ("ingresos", "egresos"):
             self.card_labels[key].setText(format_currency(summary.get(key, 0.0)))
         net = summary.get("net_profit", 0.0)
         net_label = self.card_labels["net_profit"]
@@ -586,13 +590,12 @@ class ReportsWidget(QWidget):
                     MONTH_NAMES[row["month"] - 1],
                     str(row["sale_count"]),
                     format_currency(row["ingresos"]),
-                    format_currency(row["cost"]),
-                    format_currency(row["expenses"]),
+                    format_currency(row["egresos"]),
                     format_currency(row["net_profit"]),
                 ]
                 for row in self._data.get("breakdown", [])
             ]
-            self._fill_table(self.monthly_table, rows, [120, 70, 120, 120, 120, 120])
+            self._fill_table(self.monthly_table, rows, [120, 70, 130, 130, 130])
             category_rows = [
                 [row["category"], str(row["count"]), format_currency(row["total"])]
                 for row in self._data.get("categories", [])
@@ -604,13 +607,12 @@ class ReportsWidget(QWidget):
                     _fmt_day(row["day"]),
                     str(row["sale_count"]),
                     format_currency(row["ingresos"]),
-                    format_currency(row["cost"]),
-                    format_currency(row["expenses"]),
+                    format_currency(row["egresos"]),
                     format_currency(row["net_profit"]),
                 ]
                 for row in self._data.get("breakdown", [])
             ]
-            self._fill_table(self.daily_table, rows, [100, 60, 120, 120, 120, 120])
+            self._fill_table(self.daily_table, rows, [100, 60, 130, 130, 130])
             sales_rows = []
             for sale in self._data.get("sales", []):
                 number = sale.get("invoice_number") or str(sale.get("id", ""))
@@ -787,27 +789,26 @@ class ReportsWidget(QWidget):
                 writer.writerow(["Concepto", "Valor"])
                 writer.writerow(["Ventas", summary.get("sale_count", 0)])
                 writer.writerow(["Ingresos", summary.get("ingresos", 0.0)])
-                writer.writerow(["Costo de fabricación", summary.get("cost", 0.0)])
-                writer.writerow(["Gastos", summary.get("expenses", 0.0)])
+                writer.writerow(["Costo + Gastos", summary.get("egresos", 0.0)])
                 writer.writerow(["Ganancia", summary.get("net_profit", 0.0)])
                 writer.writerow([])
                 if annual:
-                    writer.writerow(["Mes", "Ventas", "Ingresos", "Costo fab.", "Gastos", "Ganancia"])
+                    writer.writerow(["Mes", "Ventas", "Ingresos", "Egresos", "Ganancia"])
                     for row in self._data.get("breakdown", []):
                         writer.writerow([
                             MONTH_NAMES[row["month"] - 1], row["sale_count"],
-                            row["ingresos"], row["cost"], row["expenses"], row["net_profit"],
+                            row["ingresos"], row["egresos"], row["net_profit"],
                         ])
                     writer.writerow([])
                     writer.writerow(["Categoría de gasto", "N°", "Total"])
                     for row in self._data.get("categories", []):
                         writer.writerow([row["category"], row["count"], row["total"]])
                 else:
-                    writer.writerow(["Día", "Ventas", "Ingresos", "Costo fab.", "Gastos", "Ganancia"])
+                    writer.writerow(["Día", "Ventas", "Ingresos", "Egresos", "Ganancia"])
                     for row in self._data.get("breakdown", []):
                         writer.writerow([
                             _fmt_day(row["day"]), row["sale_count"],
-                            row["ingresos"], row["cost"], row["expenses"], row["net_profit"],
+                            row["ingresos"], row["egresos"], row["net_profit"],
                         ])
             QMessageBox.information(self, "Exportado", f"Reporte guardado en:\n{path}")
         except OSError as exc:

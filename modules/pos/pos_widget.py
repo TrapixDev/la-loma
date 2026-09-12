@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from config import Config
 from database.models import Sale, SaleItem
+from network.exchange_rate import get_exchange_rate_from_db
 from network.image_store import ImageStore
 from network.remote_db import AuthError, ServerError
 from network.session import session
@@ -157,6 +158,7 @@ class POSWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(12, 12, 12, 8)
@@ -180,11 +182,13 @@ class POSWidget(QWidget):
         self.cart_table.setObjectName("cartTable")
         self.cart_table.setHorizontalHeaderLabels(["Producto", "Cant.", "Precio", "Total"])
         self.cart_table.horizontalHeader().setObjectName("cartHeader")
-        self.cart_table.setColumnWidth(0, 140)
-        self.cart_table.setColumnWidth(1, 40)
-        self.cart_table.setColumnWidth(2, 90)
-        self.cart_table.setColumnWidth(3, 90)
+        header = self.cart_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col, width in ((1, 44), (2, 84), (3, 84)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+            self.cart_table.setColumnWidth(col, width)
         self.cart_table.verticalHeader().setVisible(False)
+        self.cart_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.cart_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.cart_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.cart_table.doubleClicked.connect(self._remove_selected_item)
@@ -229,19 +233,22 @@ class POSWidget(QWidget):
         self.payment_buttons["Efectivo"].setChecked(True)
         right_layout.addLayout(payment_row)
 
-        self.invoice_button = QPushButton("Factura Electrónica")
-        self.invoice_button.setObjectName("invoiceToggle")
-        self.invoice_button.setCheckable(True)
-        self.invoice_button.setFixedHeight(36)
-        self.invoice_button.clicked.connect(self._on_invoice_toggle)
-        right_layout.addWidget(self.invoice_button)
+        self.invoice_type_combo = NoWheelComboBox()
+        self.invoice_type_combo.setObjectName("mixMethod")
+        self.invoice_type_combo.addItem("Factura Electrónica", "general")
+        self.invoice_type_combo.addItem("Fact. Simplificada", "simplificada")
+        self.invoice_type_combo.setFixedHeight(36)
+        self.invoice_type_combo.currentIndexChanged.connect(self._update_totals)
+        self.invoice_type_combo.currentIndexChanged.connect(self._update_credit_button_state)
+        right_layout.addWidget(self.invoice_type_combo)
 
-        self.simplified_button = QPushButton("Fact. Simplificada")
-        self.simplified_button.setObjectName("invoiceToggle")
-        self.simplified_button.setCheckable(True)
-        self.simplified_button.setFixedHeight(36)
-        self.simplified_button.clicked.connect(self._on_simplified_toggle)
-        right_layout.addWidget(self.simplified_button)
+        self.credit_sale_button = QPushButton("Venta a Crédito")
+        self.credit_sale_button.setObjectName("invoiceToggle")
+        self.credit_sale_button.setFixedHeight(36)
+        self.credit_sale_button.setEnabled(False)
+        self.credit_sale_button.setToolTip("Seleccione un cliente para habilitar")
+        self.credit_sale_button.clicked.connect(self._on_credit_sale)
+        right_layout.addWidget(self.credit_sale_button)
 
         right_layout.addStretch()
 
@@ -358,7 +365,7 @@ class POSWidget(QWidget):
         self._update_totals()
 
     def _update_totals(self) -> None:
-        totals = calculate_totals(self.cart, exento=self.simplified_button.isChecked())
+        totals = calculate_totals(self.cart, exento=(self.invoice_type_combo.currentData() == "simplificada"))
         self.subtotal_label.setText(format_currency(totals["subtotal"]))
         self.discount_label.setText(format_currency(totals["discount"]))
         self.tax_label.setText(format_currency(totals["tax_amount"]))
@@ -370,15 +377,37 @@ class POSWidget(QWidget):
                 return method
         return None
 
-    def _on_invoice_toggle(self) -> None:
-        if self.invoice_button.isChecked():
-            self.simplified_button.setChecked(False)
-        self._update_totals()
+    def _update_credit_button_state(self) -> None:
+        if self.client is None:
+            self.credit_sale_button.setEnabled(False)
+            self.credit_sale_button.setToolTip("Seleccione un cliente para habilitar")
+        elif self.invoice_type_combo.currentData() == "simplificada":
+            self.credit_sale_button.setEnabled(False)
+            self.credit_sale_button.setToolTip(
+                "La venta a crédito requiere Factura Electrónica")
+        else:
+            self.credit_sale_button.setEnabled(True)
+            self.credit_sale_button.setToolTip("Registrar esta venta como cuenta por cobrar")
 
-    def _on_simplified_toggle(self) -> None:
-        if self.simplified_button.isChecked():
-            self.invoice_button.setChecked(False)
-        self._update_totals()
+    def _on_credit_sale(self) -> None:
+        """Navega al tab de Crédito con el carrito y cliente actuales."""
+        if not self.cart:
+            QMessageBox.warning(
+                self, "Carrito vacío",
+                "Agregue productos antes de registrar la venta a crédito.")
+            return
+        if self.client is None:
+            QMessageBox.warning(
+                self, "Cliente requerido",
+                "Seleccione un cliente para la venta a crédito.")
+            return
+        main_window = self.window()
+        if not hasattr(main_window, "_set_page"):
+            return
+        main_window._set_page("credit")
+        credit_widget = main_window.credit_widget
+        if credit_widget.start_new_credit_sale(self.cart, self.client):
+            self._clear_cart()
 
     def select_client(self) -> None:
         from modules.clients.client_widget import ClientPickerDialog
@@ -387,6 +416,18 @@ class POSWidget(QWidget):
         if dialog.exec() and dialog.selected is not None:
             self.client = dialog.selected
             self.client_label.setText(f"Cliente: {dialog.selected.name} ({dialog.selected.id_number})")
+            self._update_credit_button_state()
+
+    def _current_exchange_rate(self) -> float:
+        """Tipo de cambio guardado en la configuración (fallback 520)."""
+        db = self.services.get("db") if isinstance(self.services, dict) else None
+        if db is None:
+            return 520.0
+        try:
+            rate, _ = get_exchange_rate_from_db(db)
+            return rate if rate > 0 else 520.0
+        except Exception:
+            return 520.0
 
     def process_payment(self) -> None:
         if not self.cart:
@@ -398,8 +439,9 @@ class POSWidget(QWidget):
             QMessageBox.warning(self, "Método de pago", "Seleccione un método de pago.")
             return
 
-        electronic = self.invoice_button.isChecked()
-        simplified = self.simplified_button.isChecked()
+        invoice_data = self.invoice_type_combo.currentData()
+        electronic = (invoice_data == "general" and self.client is not None)
+        simplified = (invoice_data == "simplificada")
         totals = calculate_totals(self.cart, exento=simplified)
 
         if electronic and self.client is None:
@@ -421,7 +463,8 @@ class POSWidget(QWidget):
                 if answer != QMessageBox.StandardButton.Yes:
                     return
 
-        dialog = CobroDialog(totals["total"], parent=self)
+        dialog = CobroDialog(
+            totals["total"], exchange_rate=self._current_exchange_rate(), parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -663,8 +706,8 @@ class POSWidget(QWidget):
         self.client = None
         self.client_label.setText("Cliente: Consumidor Final")
         self.payment_buttons["Efectivo"].setChecked(True)
-        self.invoice_button.setChecked(False)
-        self.simplified_button.setChecked(False)
+        self.invoice_type_combo.setCurrentIndex(0)
+        self._update_credit_button_state()
         self._update_cart_display()
 
     def refresh_products(self) -> None:

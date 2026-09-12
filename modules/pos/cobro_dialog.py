@@ -26,26 +26,26 @@ QDialog#CobroDialog {
 }
 QLabel#cobroTotalLabel {
     color: #2fbf71;
-    font-size: 34px;
+    font-size: 35px;
     font-weight: bold;
 }
 QLabel#titleLabel {
     color: #ffffff;
-    font-size: 18px;
+    font-size: 19px;
     font-weight: bold;
 }
 QLabel#subtitleLabel {
     color: #9aa4b2;
-    font-size: 12px;
+    font-size: 13px;
 }
 QLabel#changeLabel {
     color: #2fbf71;
-    font-size: 22px;
+    font-size: 23px;
     font-weight: bold;
 }
 QLabel#errorLabel {
     color: #ef4444;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: bold;
 }
 QPushButton#methodButton {
@@ -54,7 +54,7 @@ QPushButton#methodButton {
     border: 2px solid #2e3440;
     border-radius: 8px;
     padding: 10px 6px;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: bold;
     min-width: 100px;
     min-height: 22px;
@@ -74,7 +74,7 @@ QPushButton#cobrarButton {
     border: none;
     border-radius: 8px;
     padding: 14px 20px;
-    font-size: 18px;
+    font-size: 19px;
     font-weight: bold;
     min-height: 28px;
 }
@@ -93,10 +93,10 @@ QLineEdit#cashInput {
     color: #ffffff;
     border: 2px solid #3b82f6;
     border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 22px;
+    padding: 8px 14px;
+    font-size: 19px;
     font-weight: bold;
-    min-height: 22px;
+    min-height: 18px;
 }
 QLineEdit#cashInput:focus {
     border-color: #2fbf71;
@@ -107,9 +107,9 @@ QComboBox#mixMethod {
     border: 2px solid #3b82f6;
     border-radius: 8px;
     padding: 8px 10px;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: bold;
-    min-width: 140px;
+    min-width: 120px;
 }
 QPushButton#fillButton {
     background-color: #1f2530;
@@ -117,7 +117,7 @@ QPushButton#fillButton {
     border: 2px solid #3b82f6;
     border-radius: 8px;
     padding: 8px 12px;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: bold;
 }
 QPushButton#fillButton:hover {
@@ -129,7 +129,7 @@ QPushButton#successButton {
     border: none;
     border-radius: 8px;
     padding: 12px 20px;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: bold;
 }
 QPushButton#successButton:hover {
@@ -141,7 +141,7 @@ QPushButton#closeButton {
     border: none;
     border-radius: 8px;
     padding: 12px 20px;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: bold;
 }
 QPushButton#closeButton:hover {
@@ -224,7 +224,7 @@ class CobroDialog(QDialog):
         self.setObjectName("CobroDialog")
         self.setWindowTitle("Cobrar")
         self.setMinimumSize(600, 500)
-        self.setMaximumHeight(620)
+        self.setMaximumHeight(720)
         self.setStyleSheet(_COBRO_QSS)
         self._build_ui()
         self._update_change()
@@ -356,7 +356,7 @@ class CobroDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(12)
 
         self.mix_method_a = NoWheelComboBox()
         self.mix_method_a.setObjectName("mixMethod")
@@ -370,13 +370,13 @@ class CobroDialog(QDialog):
         self.mix_amount_b = self._build_amount_field()
 
         row_a = QHBoxLayout()
-        row_a.setSpacing(8)
+        row_a.setSpacing(12)
         row_a.addWidget(self.mix_method_a)
         row_a.addWidget(self.mix_amount_a, 1)
         layout.addLayout(row_a)
 
         row_b = QHBoxLayout()
-        row_b.setSpacing(8)
+        row_b.setSpacing(12)
         row_b.addWidget(self.mix_method_b)
         row_b.addWidget(self.mix_amount_b, 1)
         layout.addLayout(row_b)

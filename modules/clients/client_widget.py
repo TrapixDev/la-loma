@@ -276,16 +276,12 @@ class ClientWidget(QWidget):
         new_button.clicked.connect(self._new_client)
         edit_button = QPushButton("Editar")
         edit_button.clicked.connect(self._edit_client)
-        delete_button = QPushButton("Eliminar")
-        delete_button.setObjectName("dangerButton")
-        delete_button.clicked.connect(self._delete_client)
         refresh_button = QPushButton("Refrescar")
         refresh_button.clicked.connect(self.refresh)
 
         toolbar.addWidget(self.search_input, 1)
         toolbar.addWidget(new_button)
         toolbar.addWidget(edit_button)
-        toolbar.addWidget(delete_button)
         toolbar.addWidget(refresh_button)
         layout.addLayout(toolbar)
 
@@ -347,29 +343,3 @@ class ClientWidget(QWidget):
         if dialog.exec() and dialog.client is not None:
             self.refresh()
             self.data_changed.emit()
-
-    def _delete_client(self) -> None:
-        client = self._selected_client()
-        if client is None:
-            QMessageBox.information(self, "Selección", "Seleccione un cliente.")
-            return
-        delete = getattr(self.services["client"], "delete", None)
-        if delete is None:
-            QMessageBox.information(
-                self,
-                "Eliminar cliente",
-                "El backend actual no soporta eliminar clientes.",
-            )
-            return
-        answer = QMessageBox.question(
-            self,
-            "Eliminar cliente",
-            f"¿Eliminar al cliente '{client.name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        delete(client.id)
-        self.refresh()
-        self.data_changed.emit()

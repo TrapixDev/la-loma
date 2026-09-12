@@ -127,8 +127,14 @@ class RemoteDatabase:
     def needs_setup(self) -> bool:
         return self.count_users() == 0
 
-    def audit(self, *args, **kwargs) -> None:
-        pass
+    def audit(self, user_id, user_name, station, event, detail="") -> None:
+        """Registra auditoría en el servidor (best-effort, no rompe la venta)."""
+        if not session.authenticated:
+            return
+        try:
+            self._post("/api/audit", {"event": event, "detail": detail})
+        except (AuthError, ServerError):
+            pass
 
     def execute_query(self, sql: str, params: tuple = ()) -> list[dict]:
         self._ensure_auth()

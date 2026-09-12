@@ -107,3 +107,47 @@ class Expense:
     user_name: str = ""
     station: str = ""
     created_at: str = ""
+
+
+@dataclass
+class CreditAccount:
+    id: int = 0
+    sale_id: int = 0
+    client_id: int = 0
+    invoice_number: str = ""
+    total: float = 0.0
+    amount_paid: float = 0.0
+    balance: float = 0.0
+    status: str = "pendiente"
+    notes: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    client_name: str = ""
+    client_id_number: str = ""
+    client_phone: str = ""
+
+
+@dataclass
+class CreditPayment:
+    id: int = 0
+    credit_account_id: int = 0
+    amount: float = 0.0
+    payment_method: str = "efectivo"
+    payment_details: str = ""
+    notes: str = ""
+    payment_reference: str = ""
+    user_id: int | None = None
+    user_name: str = ""
+    created_at: str = ""
+    client_name: str = ""
+    invoice_number: str = ""
+
+
+@dataclass
+class CreditPaymentImage:
+    id: int = 0
+    payment_id: int = 0
+    image_path: str = ""
+    description: str = ""
+    is_cover: bool = False
+    created_at: str = ""

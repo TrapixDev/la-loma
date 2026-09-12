@@ -49,22 +49,31 @@ def factura_html(sale, company: dict, cliente_nombre: str = "") -> str:
     cash_lines = ""
     method = str(getattr(sale, "payment_method", "") or "").lower()
     details_raw = getattr(sale, "payment_details", "") or ""
+    # El PDF va en colones, pero los montos de pago se guardan en la moneda en
+    # que se cobró (si fue en USD hay que reconvertirlos a CRC para mostrarlos).
+    currency = str(getattr(sale, "currency", "CRC") or "CRC")
+    rate = float(getattr(sale, "exchange_rate", 0) or 0)
+    factor = rate if currency == "USD" and rate > 0 else 1.0
+
+    def _crc(value) -> str:
+        return format_currency(float(value or 0) * factor)
+
     if method == "mixto" and details_raw.startswith("[") and details_raw != "[]":
         try:
             import json as _json
             det = _json.loads(details_raw)
             cash_lines = "".join(
-                _row(str(d.get("method", "")), format_currency(float(d.get("amount") or 0)))
+                _row(str(d.get("method", "")), _crc(d.get("amount")))
                 for d in det)
             if float(getattr(sale, "change_amount", 0) or 0) > 0:
-                cash_lines += _row("Vuelto", format_currency(float(sale.change_amount)))
+                cash_lines += _row("Vuelto", _crc(sale.change_amount))
         except Exception:
             cash_lines = ""
     elif method == "efectivo" and float(getattr(sale, "cash_received", 0) or 0) > 0:
-        cash_lines = _row("Efectivo recibido", format_currency(float(sale.cash_received))) \
-            + _row("Vuelto", format_currency(float(sale.change_amount)))
+        cash_lines = _row("Efectivo recibido", _crc(sale.cash_received)) \
+            + _row("Vuelto", _crc(sale.change_amount))
     elif method in ("tarjeta", "sinpe") and float(getattr(sale, "cash_received", 0) or 0) > 0:
-        cash_lines = _row(f"Pago con {method.title()}", format_currency(float(sale.cash_received)))
+        cash_lines = _row(f"Pago con {method.title()}", _crc(sale.cash_received))
 
     clave_html = ""
     if not is_simplified:

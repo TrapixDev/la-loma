@@ -11,9 +11,10 @@ os.chdir(PROJECT_DIR)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from database.db_manager import DatabaseManager
-from database.seed import seed_initial_data
+from database.seed import DEMO_CREDIT_SALES, seed_initial_data
 
 TEST_DB = os.path.join(PROJECT_DIR, "tests", ".tmp", "test_seed_demo.db")
+TEST_DOCS = os.path.join(PROJECT_DIR, "tests", ".tmp", "creditos")
 
 
 def cleanup():
@@ -25,6 +26,12 @@ def cleanup():
                 p = TEST_DB + ext
                 if os.path.exists(p):
                     os.remove(p)
+            if os.path.isdir(TEST_DOCS):
+                for name in os.listdir(TEST_DOCS):
+                    try:
+                        os.remove(os.path.join(TEST_DOCS, name))
+                    except OSError:
+                        pass
             break
         except PermissionError:
             time.sleep(0.1)
@@ -50,12 +57,20 @@ def _counts(db):
         "sales": db.execute_query("SELECT COUNT(*) AS t FROM sales")[0]["t"],
         "clients": db.execute_query("SELECT COUNT(*) AS t FROM clients")[0]["t"],
         "exp": db.execute_query("SELECT COUNT(*) AS t FROM expenses")[0]["t"],
+        "cacc": db.execute_query("SELECT COUNT(*) AS t FROM credit_accounts")[0]["t"],
+        "cpay": db.execute_query("SELECT COUNT(*) AS t FROM credit_payments")[0]["t"],
+        "cimg": db.execute_query("SELECT COUNT(*) AS t FROM credit_payment_images")[0]["t"],
     }
+
+
+def _enable_demo():
+    os.environ["POS_DEMO_DATA"] = "1"
+    os.environ["POS_DEMO_DOCS_DIR"] = TEST_DOCS
 
 
 def test_seed_demo_con_producto_existente():
     db = get_db()
-    os.environ["POS_DEMO_DATA"] = "1"
+    _enable_demo()
     seed_initial_data(db)
     counts = _counts(db)
     silla = db.execute_query(
@@ -69,13 +84,33 @@ def test_seed_demo_con_producto_existente():
 
 def test_seed_demo_no_duplica():
     db = get_db()
-    os.environ["POS_DEMO_DATA"] = "1"
+    _enable_demo()
     seed_initial_data(db)
     first = _counts(db)
     seed_initial_data(db)
     second = _counts(db)
     ok = all(second[k] == first[k] for k in first)
     print(f"[{'OK' if ok else 'FAIL'}] seed demo idempotente: {first} -> {second}")
+    db.close()
+    cleanup()
+    assert ok
+
+
+def test_seed_demo_incluye_credito():
+    db = get_db()
+    _enable_demo()
+    seed_initial_data(db)
+    counts = _counts(db)
+    ventas_credito = db.execute_query(
+        "SELECT COUNT(*) AS t FROM sales WHERE payment_method = 'credito'")[0]["t"]
+    pendientes = db.execute_query(
+        "SELECT COUNT(*) AS t FROM credit_accounts WHERE status = 'pendiente'")[0]["t"]
+    ok = (ventas_credito == len(DEMO_CREDIT_SALES)
+          and counts["cacc"] == len(DEMO_CREDIT_SALES)
+          and counts["cpay"] > 0 and counts["cimg"] > 0
+          and pendientes > 0)
+    print(f"[{'OK' if ok else 'FAIL'}] seed demo crédito: {counts}, "
+          f"ventas_credito={ventas_credito}, pendientes={pendientes}")
     db.close()
     cleanup()
     assert ok
@@ -98,6 +133,7 @@ if __name__ == "__main__":
     tests = [
         test_seed_demo_con_producto_existente,
         test_seed_demo_no_duplica,
+        test_seed_demo_incluye_credito,
         test_seed_sin_demo_no_agrega_productos,
     ]
     failed = 0

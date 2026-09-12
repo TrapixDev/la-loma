@@ -279,6 +279,59 @@ DEMO_EXPENSES = [
     ("Salarios", 1, 460000, "Quincena segunda del mes (equipo de producción)", "efectivo"),
 ]
 
+# Ventas a crédito demo: (cliente, días atrás, hora "HH:MM", [(código, cantidad)],
+#   [(días atrás del abono, fracción del total, método, notas, lleva comprobante)])
+# La fracción pendiente queda como saldo de la cuenta por cobrar.
+DEMO_CREDIT_SALES = [
+    ("Constructora El Roble S.A.", 26, "10:20",
+     [("OF-401", 2), ("OF-403", 1)],
+     [(20, 0.5, "transferencia", "Abono inicial 50%", True),
+      (9, 0.3, "transferencia", "Segundo abono 30%", True)]),
+    ("Hotel Mirador del Valle S.A.", 18, "15:10",
+     [("DR-202", 2), ("DR-203", 1)],
+     [(12, 0.4, "sinpe", "Abono 40% por SINPE", True),
+      (5, 0.4, "sinpe", "Segundo abono 40%", False)]),
+    ("Luis Fernando Castro Mena", 7, "11:40",
+     [("SL-001", 1), ("SL-004", 1)],
+     [(2, 0.5, "efectivo", "Abono 50% en efectivo", True)]),
+    ("María Rodríguez Chaves", 3, "09:30",
+     [("CM-101", 1)],
+     []),
+]
+
+
+def _demo_receipt_dir() -> str:
+    override = os.environ.get("POS_DEMO_DOCS_DIR")
+    if override:
+        return override
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "PosLaLoma", "documentos", "creditos")
+
+
+def _write_demo_receipt(path: str, color: tuple[int, int, int] = (47, 191, 113)) -> bool:
+    """Genera un PNG pequeño de ejemplo para simular un comprobante de pago."""
+    import struct
+    import zlib
+
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        width = height = 96
+        raw = b"".join(b"\x00" + bytes(color) * width for _ in range(height))
+
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return (struct.pack(">I", len(data)) + tag + data
+                    + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+        png = (b"\x89PNG\r\n\x1a\n"
+               + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+               + chunk(b"IDAT", zlib.compress(raw))
+               + chunk(b"IEND", b""))
+        with open(path, "wb") as handle:
+            handle.write(png)
+        return True
+    except OSError:
+        return False
+
 
 def seed_initial_data(db: DatabaseManager) -> None:
     """Inserta datos iniciales: categorías, configuración de Hacienda y cliente por defecto."""
@@ -410,6 +463,85 @@ def seed_demo_data(db: DatabaseManager) -> None:
                         (sale_id, product_ids[code], product[3], qty, unit_price,
                          product[5], item_tax, round(unit_price * qty + item_tax, 2)),
                     )
+
+            # Ventas a crédito demo: continúan la numeración y crean la cuenta
+            # por cobrar con abonos parciales (algunos con comprobante adjunto).
+            first_credit = len(DEMO_SALES) + 1
+            for offset, (client, days_ago, time_str, items, abonos) in enumerate(DEMO_CREDIT_SALES):
+                number = first_credit + offset
+                created = (now - timedelta(days=days_ago)).replace(
+                    hour=int(time_str[:2]), minute=int(time_str[3:]), second=0, microsecond=0)
+                stamp = created.strftime("%Y-%m-%d %H:%M:%S")
+                subtotal = 0.0
+                tax = 0.0
+                line_items = []
+                for code, qty in items:
+                    unit_price = prices[code]
+                    item_subtotal = unit_price * qty
+                    item_tax = round(item_subtotal * 0.13, 2)
+                    subtotal += item_subtotal
+                    tax += item_tax
+                    line_items.append((code, qty, unit_price, item_tax))
+                total = round(subtotal + tax, 2)
+                cursor = connection.execute(
+                    "INSERT INTO sales (invoice_number, client_id, subtotal, discount, "
+                    "tax_amount, total, payment_method, cash_received, change_amount, "
+                    "status, station, user_id, user_name, created_at) "
+                    "VALUES (?, ?, ?, 0, ?, ?, 'credito', 0, 0, 'completada', 'CAJA1', "
+                    "NULL, 'Administrador', ?)",
+                    (f"V-{number:05d}", client_ids.get(client, 1),
+                     round(subtotal, 2), round(tax, 2), total, stamp),
+                )
+                sale_id = cursor.lastrowid
+                for code, qty, unit_price, item_tax in line_items:
+                    product = next(p for p in DEMO_PRODUCTS if p[1] == code)
+                    connection.execute(
+                        "INSERT INTO sale_items (sale_id, product_id, product_name, quantity, "
+                        "unit_price, unit_cost, discount, tax_amount, total) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                        (sale_id, product_ids[code], product[3], qty, unit_price,
+                         product[5], item_tax, round(unit_price * qty + item_tax, 2)),
+                    )
+                cursor = connection.execute(
+                    "INSERT INTO credit_accounts (sale_id, client_id, invoice_number, "
+                    "total, amount_paid, balance, status, notes, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, 0, ?, 'pendiente', ?, ?, ?)",
+                    (sale_id, client_ids.get(client, 1), f"V-{number:05d}", total, total,
+                     "Venta a crédito (demo)", stamp, stamp),
+                )
+                account_id = cursor.lastrowid
+                paid = 0.0
+                for abono_days, fraction, pay_method, notes, receipt in abonos:
+                    paid = round(paid + round(total * fraction, 2), 2)
+                    pay_date = (now - timedelta(days=abono_days)).replace(
+                        hour=min(17, created.hour + 1),
+                        minute=(created.minute + 15) % 60, second=0, microsecond=0)
+                    pay_stamp = pay_date.strftime("%Y-%m-%d %H:%M:%S")
+                    cursor = connection.execute(
+                        "INSERT INTO credit_payments (credit_account_id, amount, "
+                        "payment_method, notes, user_id, user_name, created_at) "
+                        "VALUES (?, ?, ?, ?, NULL, 'Administrador', ?)",
+                        (account_id, round(total * fraction, 2), pay_method,
+                         notes, pay_stamp),
+                    )
+                    payment_id = cursor.lastrowid
+                    if receipt:
+                        image_path = os.path.join(
+                            _demo_receipt_dir(), f"demo_pago_{payment_id:05d}.png")
+                        if _write_demo_receipt(image_path):
+                            connection.execute(
+                                "INSERT INTO credit_payment_images (payment_id, "
+                                "image_path, description) VALUES (?, ?, ?)",
+                                (payment_id, image_path,
+                                 f"Comprobante {notes}".strip()),
+                            )
+                balance = round(max(0.0, total - paid), 2)
+                connection.execute(
+                    "UPDATE credit_accounts SET amount_paid = ?, balance = ?, "
+                    "status = ? WHERE id = ?",
+                    (paid, balance, "pagada" if balance <= 0 else "pendiente",
+                     account_id),
+                )
 
     # Gastos de demostración: solo en bases sin gastos.
     if db.execute_query("SELECT COUNT(*) AS t FROM expenses")[0]["t"] == 0:
