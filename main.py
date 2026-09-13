@@ -10,6 +10,7 @@ Modos:
 import argparse
 import ctypes
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -102,6 +103,18 @@ def _is_local_server() -> bool:
     return host in ("", "127.0.0.1", "localhost", "::1")
 
 
+def _port_busy() -> bool:
+    """True si otro programa ocupa el puerto del servidor en 127.0.0.1."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.1", Config.SERVER_PORT))
+        return False
+    except OSError:
+        return True
+    finally:
+        probe.close()
+
+
 def _start_server_process() -> bool:
     """Abre el servidor en un proceso propio sin ventana (si el servidor es local).
 
@@ -132,19 +145,27 @@ def _start_server_process() -> bool:
 def _run_server_mode() -> int:
     """Rol servidor (sin UI). Usado por el .exe lanzado con --server."""
     import threading
+    import traceback
     import server as server_module
 
     from utils.arranque import asegurar_estructura, migrar_datos_si_vacio
     asegurar_estructura()
     migrar_datos_si_vacio()
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Servidor POS iniciando "
+          f"en puerto {Config.SERVER_PORT} (log {Path(__file__).name})")
     try:
         server = server_module.start_server()
     except OSError as exc:
         if getattr(exc, "winerror", None) == 10048:
-            print(f"El puerto {Config.SERVER_PORT} ya está en uso.")
+            print(f"El puerto {Config.SERVER_PORT} ya está en uso. "
+                  f"Cierre el otro programa o cambie server_port en config.ini.")
             return 0
-        print(f"No se pudo iniciar el servidor: {exc}")
+        traceback.print_exc()
         return 1
+    except Exception:
+        traceback.print_exc()
+        return 1
+    print(f"Servidor POS escuchando en el puerto {Config.SERVER_PORT}.")
     thread = threading.Thread(target=server_module.backup_loop, args=(server,),
                               daemon=True)
     thread.start()
@@ -234,11 +255,18 @@ def ensure_server_available(db) -> bool:
         box.setWindowTitle("Servidor no disponible")
         box.setText("No se pudo conectar con el servidor del POS.")
         if local:
-            box.setInformativeText(
-                "Se intentó iniciar el servidor automáticamente, pero no\n"
-                "respondió. Revise la ventana del servidor por si muestra\n"
-                "un error, o púlselo de nuevo aquí."
-            )
+            if _port_busy():
+                box.setInformativeText(
+                    f"El puerto {Config.SERVER_PORT} está en uso (por otro\n"
+                    f"programa u otra instancia del servidor). Cierre el otro\n"
+                    f"programa o cambie server_port en config.ini y reintente."
+                )
+            else:
+                box.setInformativeText(
+                    "Se intentó iniciar el servidor automáticamente, pero no\n"
+                    "respondió. Revise la ventana del servidor por si muestra\n"
+                    "un error, o púlselo de nuevo aquí."
+                )
         else:
             box.setInformativeText(
                 f"Verifique que:\n\n"

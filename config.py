@@ -19,9 +19,13 @@ CONFIG.INI (opcional):
 
       [pos]
       server_url = http://192.168.1.10:8000
+      server_port = 8000
       station = CAJA1
       docs_path = \\\\SERVIDOR\\documentos
       mode = server
+
+  SERVER_PORT define el puerto donde escucha el servidor local (útil si otro
+  programa usa el 8000); si se omite, se toma el puerto de server_url.
 
   DOCS_PATH es la carpeta compartida en red donde se archivan XML+PDF de las
   facturas (todas las cajas guardan ahí). Si está vacía o no es accesible, se
@@ -32,6 +36,7 @@ import os
 import sys
 from configparser import ConfigParser
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 APP_VERSION = "1.0.0"
@@ -90,6 +95,25 @@ def _opt(name: str) -> str:
     return _OVERRIDES.get(name, "")
 
 
+def _resolve_port(server_port: str, server_url: str, default: int = 8000) -> int:
+    """Puerto del servidor: clave server_port, luego el de server_url, luego 8000."""
+    if server_port:
+        try:
+            value = int(server_port)
+            if 0 < value <= 65535:
+                return value
+        except (TypeError, ValueError):
+            pass
+    if server_url:
+        try:
+            parsed = urlparse(server_url)
+            if parsed.port:
+                return parsed.port
+        except ValueError:
+            pass
+    return default
+
+
 class Config:
     APP_NAME = "POS - La Loma"
     APP_VERSION = APP_VERSION
@@ -114,8 +138,8 @@ class Config:
     MOSTRAR_EQUIVALENTE_CRC = _opt("mostrar_equivalente_crc") != "0"
 
     SERVER_HOST = "0.0.0.0"
-    SERVER_PORT = 8000
-    SERVER_URL = _opt("server_url") or "http://127.0.0.1:8000"
+    SERVER_PORT = _resolve_port(_opt("server_port"), _opt("server_url"))
+    SERVER_URL = _opt("server_url") or f"http://127.0.0.1:{SERVER_PORT}"
 
     STATION = _opt("station") or "CAJA1"
 

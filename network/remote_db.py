@@ -6,6 +6,7 @@ negocio funcionen sin cambios sobre HTTP, con autenticación por token y
 transacciones atómicas en el servidor.
 """
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -101,6 +102,14 @@ class RemoteDatabase:
             raise ServerError(
                 f"No se pudo conectar con el servidor en {self.base_url}. "
                 f"Verifique que esté encendido y alcance esta dirección."
+            ) from exc
+        except (http.client.HTTPException, OSError) as exc:
+            # Casos como RemoteDisconnected: el puerto está ocupado por otro
+            # programa que cierra la conexión sin responder.
+            raise ServerError(
+                f"El servidor en {self.base_url} cerró la conexión sin "
+                f"responder. Verifique que el puerto sea el del POS y que no "
+                f"lo esté usando otro programa."
             ) from exc
 
     def _check(self, result: dict) -> dict:
