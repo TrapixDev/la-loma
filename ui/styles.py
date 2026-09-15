@@ -185,21 +185,21 @@ QLabel#emptyState {
 }
 
 QLabel#chipCredit {
-    background-color: rgba(59, 130, 246, 0.18);
-    color: #7ab7ff;
-    border: 1px solid rgba(59, 130, 246, 0.45);
+    background-color: rgba(59, 130, 246, 0.28);
+    color: #a8cfff;
+    border: 1px solid #3b82f6;
     border-radius: 10px;
-    padding: 2px 10px;
-    font-size: 12px;
+    padding: 3px 12px;
+    font-size: 13px;
 }
 
 QLabel#chipOrder {
-    background-color: rgba(245, 158, 11, 0.16);
-    color: #f5b23c;
-    border: 1px solid rgba(245, 158, 11, 0.45);
+    background-color: rgba(245, 158, 11, 0.30);
+    color: #ffd18a;
+    border: 1px solid #f59e0b;
     border-radius: 10px;
-    padding: 2px 10px;
-    font-size: 12px;
+    padding: 3px 12px;
+    font-size: 13px;
 }
 
 QPushButton#paymentButton {
