@@ -1372,15 +1372,15 @@ class CreditWidget(QWidget):
             "Pagado", "Saldo", "Estado", "Entrega"])
         self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.setColumnWidth(0, 180)
-        self.table.setColumnWidth(1, 96)
-        self.table.setColumnWidth(2, 120)
-        self.table.setColumnWidth(3, 100)
-        self.table.setColumnWidth(4, 110)
-        self.table.setColumnWidth(5, 110)
-        self.table.setColumnWidth(6, 110)
-        self.table.setColumnWidth(7, 90)
-        self.table.setColumnWidth(8, 110)
+        self.table.setColumnWidth(0, 200)
+        self.table.setColumnWidth(1, 112)
+        self.table.setColumnWidth(2, 140)
+        self.table.setColumnWidth(3, 108)
+        self.table.setColumnWidth(4, 118)
+        self.table.setColumnWidth(5, 118)
+        self.table.setColumnWidth(6, 118)
+        self.table.setColumnWidth(7, 140)
+        self.table.setColumnWidth(8, 118)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -1442,10 +1442,10 @@ class CreditWidget(QWidget):
                 row, 1,
                 self._make_type_chip("Encargo" if es_encargo else "Crédito"))
         self.table.resizeColumnToContents(0)
-        if self.table.columnWidth(0) > 210:
-            self.table.setColumnWidth(0, 210)
-        for col, ancho in ((1, 108), (2, 120), (3, 100), (4, 108), (5, 108),
-                           (6, 108), (7, 100), (8, 108)):
+        if self.table.columnWidth(0) > 200:
+            self.table.setColumnWidth(0, 200)
+        for col, ancho in ((1, 112), (2, 140), (3, 108), (4, 118), (5, 118),
+                           (6, 118), (7, 140), (8, 118)):
             self.table.setColumnWidth(col, ancho)
         summary = svc.get_summary()
         self.card_labels["pendiente"].setText(
