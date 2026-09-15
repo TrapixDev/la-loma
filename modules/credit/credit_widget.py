@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -423,7 +423,9 @@ class CreditDetailDialog(QDialog):
         super().__init__(parent)
         self.services = services
         self.account = account
-        self.setWindowTitle(f"Cuenta {account.invoice_number}")
+        tipo = ("Encargo" if (account.account_type or "credito") != "credito"
+                else "Crédito")
+        self.setWindowTitle(f"Detalle de {tipo} · {account.invoice_number}")
         self.setMinimumSize(560, 440)
         self._setup_ui()
         self._load_data()
@@ -431,6 +433,15 @@ class CreditDetailDialog(QDialog):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+
+        tipo_row = QHBoxLayout()
+        es_encargo = (self.account.account_type or "credito") != "credito"
+        chip = QLabel("Encargo" if es_encargo else "Crédito")
+        chip.setObjectName("chipOrder" if es_encargo else "chipCredit")
+        chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tipo_row.addWidget(chip)
+        tipo_row.addStretch(1)
+        layout.addLayout(tipo_row)
 
         self.info_label = QLabel()
         self.info_label.setObjectName("sectionTitle")
@@ -1355,20 +1366,21 @@ class CreditWidget(QWidget):
         layout.addLayout(cards)
 
         self.table = EmptyStateTable(
-            "No hay cuentas por cobrar con los filtros actuales.", 0, 8)
+            "No hay cuentas por cobrar con los filtros actuales.", 0, 9)
         self.table.setHorizontalHeaderLabels([
-            "Cliente", "Identificación", "Factura", "Total",
+            "Cliente", "Tipo", "Identificación", "Factura", "Total",
             "Pagado", "Saldo", "Estado", "Entrega"])
         self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setColumnWidth(0, 180)
-        self.table.setColumnWidth(1, 120)
-        self.table.setColumnWidth(2, 100)
-        self.table.setColumnWidth(3, 110)
+        self.table.setColumnWidth(1, 96)
+        self.table.setColumnWidth(2, 120)
+        self.table.setColumnWidth(3, 100)
         self.table.setColumnWidth(4, 110)
         self.table.setColumnWidth(5, 110)
-        self.table.setColumnWidth(6, 90)
-        self.table.setColumnWidth(7, 110)
+        self.table.setColumnWidth(6, 110)
+        self.table.setColumnWidth(7, 90)
+        self.table.setColumnWidth(8, 110)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -1406,6 +1418,7 @@ class CreditWidget(QWidget):
                 entrega = "Pendiente"
             values = [
                 a.client_name,
+                "",
                 a.client_id_number or "",
                 a.invoice_number,
                 format_currency(a.total),
@@ -1416,14 +1429,24 @@ class CreditWidget(QWidget):
             ]
             for col, val in enumerate(values):
                 item = QTableWidgetItem(str(val))
-                if col == 5 and a.status == "pendiente":
+                if col == 6 and a.status == "pendiente":
                     item.setForeground(Qt.GlobalColor.yellow)
-                elif col == 7 and es_encargo and a.delivery_status != "entregado":
+                elif col == 8 and es_encargo and a.delivery_status != "entregado":
                     item.setForeground(Qt.GlobalColor.yellow)
+                elif col == 3 and es_encargo:
+                    item.setForeground(QColor("#f5b23c"))
                 self.table.setItem(row, col, item)
             self.table.item(row, 0).setData(
                 Qt.ItemDataRole.UserRole, a)
-        self.table.resizeColumnsToContents()
+            self.table.setCellWidget(
+                row, 1,
+                self._make_type_chip("Encargo" if es_encargo else "Crédito"))
+        self.table.resizeColumnToContents(0)
+        if self.table.columnWidth(0) > 210:
+            self.table.setColumnWidth(0, 210)
+        for col, ancho in ((1, 108), (2, 120), (3, 100), (4, 108), (5, 108),
+                           (6, 108), (7, 100), (8, 108)):
+            self.table.setColumnWidth(col, ancho)
         summary = svc.get_summary()
         self.card_labels["pendiente"].setText(
             format_currency(summary["total_pendiente"]))
@@ -1436,6 +1459,22 @@ class CreditWidget(QWidget):
         self.card_labels["encargos"].setToolTip(
             f"Saldo pendiente de encargos: "
             f"{format_currency(summary['total_encargos'])}")
+
+    def _make_type_chip(self, tipo: str) -> QWidget:
+        """Chip centrado para distinguir Crédito (azul) de Encargo (ámbar)."""
+        chip = QLabel(tipo)
+        chip.setObjectName("chipOrder" if tipo == "Encargo" else "chipCredit")
+        chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        holder = QWidget()
+        holder_layout = QHBoxLayout(holder)
+        holder_layout.setContentsMargins(8, 4, 8, 4)
+        holder_layout.addWidget(chip)
+        holder_layout.addStretch(1)
+        holder.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        chip.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        return holder
 
     def _selected_account(self) -> CreditAccount | None:
         row = self.table.currentRow()

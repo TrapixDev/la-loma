@@ -184,6 +184,24 @@ QLabel#emptyState {
     padding: 16px;
 }
 
+QLabel#chipCredit {
+    background-color: rgba(59, 130, 246, 0.18);
+    color: #7ab7ff;
+    border: 1px solid rgba(59, 130, 246, 0.45);
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 12px;
+}
+
+QLabel#chipOrder {
+    background-color: rgba(245, 158, 11, 0.16);
+    color: #f5b23c;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 12px;
+}
+
 QPushButton#paymentButton {
     background-color: #1f2530;
     color: #b9c2cf;
