@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from database.models import Category
 from network.image_store import ImageStore
+from utils.helpers import ajustar_anchos_encabezado, EmptyStateTable
 
 
 def _build_dataclass(cls, **kwargs):
@@ -208,15 +209,11 @@ class CategoryWidget(QWidget):
         buttons.addWidget(refresh_button)
         layout.addLayout(buttons)
 
-        self.table = QTableWidget(0, 5)
+        self.table = EmptyStateTable("No hay categorías registradas.", 0, 5)
         self.table.setHorizontalHeaderLabels(["Foto", "Nombre", "Descripción", "Productos", "Estado"])
         self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.setColumnWidth(0, 70)
-        self.table.setColumnWidth(1, 160)
-        self.table.setColumnWidth(2, 230)
-        self.table.setColumnWidth(3, 80)
-        self.table.setColumnWidth(4, 80)
+        ajustar_anchos_encabezado(self.table, [70, 170, 230, 95, 85])
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(80)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)

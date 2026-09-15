@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -27,14 +28,20 @@ from network.session import session
 from ui.login_dialog import LoginDialog
 
 NAV_ITEMS = [
-    ("Punto de Venta", "pos"),
+    ("Ventas", "pos"),
     ("Crédito", "credit"),
     ("Categorías", "categories"),
     ("Productos", "products"),
     ("Clientes", "clients"),
     ("Reportes", "reports"),
-    ("Configuración", "settings"),
+    ("Config.", "settings"),
 ]
+
+# Nombre completo para el tooltip de las pestañas acortadas (768p).
+NAV_TOOLTIPS = {
+    "pos": "Punto de Venta",
+    "settings": "Configuración",
+}
 
 CHECK_INTERVAL_MS = 60_000
 
@@ -73,21 +80,27 @@ class MainWindow(QMainWindow):
         header.setFixedHeight(52)
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 8, 0)
-        header_layout.setSpacing(0)
+        header_layout.setSpacing(6)
 
         title = QLabel("POS - La Loma")
         title.setObjectName("appTitle")
         header_layout.addWidget(title)
-        header_layout.addSpacing(16)
+        header_layout.addSpacing(14)
 
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
         self.nav_buttons: dict[str, QPushButton] = {}
         self.pages = QStackedWidget()
+        # La página más ancha (p. ej. Reportes) no debe forzar la ventana más
+        # allá de la pantalla: el stack puede encogerse y cada página se adapta.
+        self.pages.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                 QSizePolicy.Policy.Expanding)
+        self.pages.setMinimumWidth(0)
         for label, key in NAV_ITEMS:
             button = QPushButton(label)
             button.setObjectName("navButton")
             button.setCheckable(True)
+            button.setToolTip(NAV_TOOLTIPS.get(key, label))
             self.nav_group.addButton(button)
             self.nav_buttons[key] = button
             header_layout.addWidget(button)

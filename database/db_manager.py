@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS sales (
     cash_received REAL DEFAULT 0,
     change_amount REAL DEFAULT 0,
     payment_details TEXT,
+    promotions_applied TEXT DEFAULT '',
     invoice_type TEXT DEFAULT 'general',
     currency TEXT DEFAULT 'CRC',
     exchange_rate REAL DEFAULT 0,
@@ -202,6 +203,12 @@ CREATE TABLE IF NOT EXISTS credit_accounts (
     amount_paid REAL NOT NULL DEFAULT 0,
     balance REAL NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pendiente',
+    account_type TEXT NOT NULL DEFAULT 'credito',
+    delivery_status TEXT NOT NULL DEFAULT 'entregado',
+    delivered_at TEXT DEFAULT '',
+    due_date TEXT DEFAULT '',
+    financing_months INTEGER DEFAULT 0,
+    financing_installment REAL DEFAULT 0,
     notes TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -229,6 +236,17 @@ CREATE TABLE IF NOT EXISTS credit_payment_images (
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    params TEXT NOT NULL DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_products_category ON products (category_id);
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);
 CREATE INDEX IF NOT EXISTS idx_sales_client ON sales (client_id);
@@ -243,6 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_credit_payment_images ON credit_payment_images (p
 CREATE INDEX IF NOT EXISTS idx_sales_created ON sales (created_at);
 CREATE INDEX IF NOT EXISTS idx_credit_notes_sale ON credit_notes (sale_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses (category);
+CREATE INDEX IF NOT EXISTS idx_promotions_active ON promotions (active, type);
 """
 
 
@@ -280,6 +299,9 @@ class DatabaseManager:
                 "ALTER TABLE sales ADD COLUMN excluir_reporte INTEGER DEFAULT 0")
         if "payment_details" not in sales_columns:
             connection.execute("ALTER TABLE sales ADD COLUMN payment_details TEXT")
+        if "promotions_applied" not in sales_columns:
+            connection.execute(
+                "ALTER TABLE sales ADD COLUMN promotions_applied TEXT DEFAULT ''")
         if "invoice_type" not in sales_columns:
             connection.execute(
                 "ALTER TABLE sales ADD COLUMN invoice_type TEXT DEFAULT 'general'")
@@ -315,6 +337,35 @@ class DatabaseManager:
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_payments_reference "
                 "ON credit_payments (payment_reference)"
+            )
+        account_columns = {row["name"] for row in connection.execute(
+            "PRAGMA table_info(credit_accounts)")}
+        if account_columns:
+            if "account_type" not in account_columns:
+                connection.execute(
+                    "ALTER TABLE credit_accounts ADD COLUMN account_type "
+                    "TEXT NOT NULL DEFAULT 'credito'")
+            if "delivery_status" not in account_columns:
+                connection.execute(
+                    "ALTER TABLE credit_accounts ADD COLUMN delivery_status "
+                    "TEXT NOT NULL DEFAULT 'entregado'")
+            if "delivered_at" not in account_columns:
+                connection.execute(
+                    "ALTER TABLE credit_accounts ADD COLUMN delivered_at TEXT DEFAULT ''")
+            if "due_date" not in account_columns:
+                connection.execute(
+                    "ALTER TABLE credit_accounts ADD COLUMN due_date TEXT DEFAULT ''")
+            if "financing_months" not in account_columns:
+                connection.execute(
+                    "ALTER TABLE credit_accounts ADD COLUMN financing_months "
+                    "INTEGER DEFAULT 0")
+            if "financing_installment" not in account_columns:
+                connection.execute(
+                    "ALTER TABLE credit_accounts ADD COLUMN financing_installment "
+                    "REAL DEFAULT 0")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_credit_accounts_type "
+                "ON credit_accounts (account_type)"
             )
         duplicates = connection.execute(
             "SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL "

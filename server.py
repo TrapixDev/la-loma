@@ -48,12 +48,12 @@ DML_ALLOWED_TABLES = {
     "categories", "products", "clients", "sales", "sale_items", "expenses",
     "expense_categories", "product_images", "counters", "app_config",
     "hacienda_config", "credit_accounts", "credit_payments",
-    "credit_payment_images", "credit_notes", "audit_log",
+    "credit_payment_images", "credit_notes", "promotions", "audit_log",
 }
 DELETE_ALLOWED_TABLES = {
     "categories", "products", "clients", "expenses", "expense_categories",
     "product_images", "credit_accounts", "credit_payments",
-    "credit_payment_images", "credit_notes",
+    "credit_payment_images", "credit_notes", "promotions",
 }
 FORBIDDEN_SELECT_TABLES = {"users", "sqlite_master", "sqlite_schema"}
 _TABLE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")

@@ -11,7 +11,12 @@ os.chdir(PROJECT_DIR)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from database.db_manager import DatabaseManager
-from database.seed import DEMO_CREDIT_SALES, seed_initial_data
+from database.seed import (
+    DEMO_CREDIT_SALES,
+    DEMO_ENCARGOS,
+    DEMO_PROMOTIONS,
+    seed_initial_data,
+)
 
 TEST_DB = os.path.join(PROJECT_DIR, "tests", ".tmp", "test_seed_demo.db")
 TEST_DOCS = os.path.join(PROJECT_DIR, "tests", ".tmp", "creditos")
@@ -60,6 +65,7 @@ def _counts(db):
         "cacc": db.execute_query("SELECT COUNT(*) AS t FROM credit_accounts")[0]["t"],
         "cpay": db.execute_query("SELECT COUNT(*) AS t FROM credit_payments")[0]["t"],
         "cimg": db.execute_query("SELECT COUNT(*) AS t FROM credit_payment_images")[0]["t"],
+        "promos": db.execute_query("SELECT COUNT(*) AS t FROM promotions")[0]["t"],
     }
 
 
@@ -105,12 +111,21 @@ def test_seed_demo_incluye_credito():
         "SELECT COUNT(*) AS t FROM sales WHERE payment_method = 'credito'")[0]["t"]
     pendientes = db.execute_query(
         "SELECT COUNT(*) AS t FROM credit_accounts WHERE status = 'pendiente'")[0]["t"]
-    ok = (ventas_credito == len(DEMO_CREDIT_SALES)
-          and counts["cacc"] == len(DEMO_CREDIT_SALES)
+    encargos = db.execute_query(
+        "SELECT COUNT(*) AS t FROM credit_accounts WHERE account_type = 'encargo'")[0]["t"]
+    entregados = db.execute_query(
+        "SELECT COUNT(*) AS t FROM credit_accounts WHERE delivery_status = 'entregado' "
+        "AND account_type = 'encargo'")[0]["t"]
+    total_ventas = len(DEMO_CREDIT_SALES) + len(DEMO_ENCARGOS)
+    ok = (ventas_credito == total_ventas
+          and counts["cacc"] == total_ventas
           and counts["cpay"] > 0 and counts["cimg"] > 0
-          and pendientes > 0)
+          and pendientes > 0
+          and encargos == len(DEMO_ENCARGOS)
+          and entregados == 1)
     print(f"[{'OK' if ok else 'FAIL'}] seed demo crédito: {counts}, "
-          f"ventas_credito={ventas_credito}, pendientes={pendientes}")
+          f"ventas_credito={ventas_credito}, pendientes={pendientes}, "
+          f"encargos={encargos}, entregados={entregados}")
     db.close()
     cleanup()
     assert ok
@@ -122,8 +137,23 @@ def test_seed_sin_demo_no_agrega_productos():
     os.environ["POS_DEMO_DATA"] = "0"
     seed_initial_data(db)
     counts = _counts(db)
-    ok = counts["prod"] == 1 and counts["sales"] == 0
+    ok = counts["prod"] == 1 and counts["sales"] == 0 and counts["promos"] == 0
     print(f"[{'OK' if ok else 'FAIL'}] POS_DEMO_DATA=0 no siembra demo: {counts}")
+    db.close()
+    cleanup()
+    assert ok
+
+
+def test_seed_demo_incluye_promociones():
+    db = get_db()
+    _enable_demo()
+    seed_initial_data(db)
+    counts = _counts(db)
+    activas = db.execute_query(
+        "SELECT COUNT(*) AS t FROM promotions WHERE active = 1")[0]["t"]
+    ok = counts["promos"] == len(DEMO_PROMOTIONS) and activas == len(DEMO_PROMOTIONS)
+    print(f"[{'OK' if ok else 'FAIL'}] seed demo promociones: "
+          f"{counts}, activas={activas}")
     db.close()
     cleanup()
     assert ok
@@ -134,6 +164,7 @@ if __name__ == "__main__":
         test_seed_demo_con_producto_existente,
         test_seed_demo_no_duplica,
         test_seed_demo_incluye_credito,
+        test_seed_demo_incluye_promociones,
         test_seed_sin_demo_no_agrega_productos,
     ]
     failed = 0

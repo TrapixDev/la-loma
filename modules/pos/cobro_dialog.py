@@ -207,13 +207,18 @@ class CobroDialog(QDialog):
     """Diálogo de cobro con monto por método y opción de pago Mixto."""
 
     def __init__(self, total: float, exchange_rate: float = 520.0,
+                 descuentos: dict | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.total = total
-        self.total_crc = total  # Guardar el total original en CRC
+        self.base_total_crc = float(total)
+        self.total_crc = total  # Total a pagar en CRC (con descuento aplicado)
         self.exchange_rate = exchange_rate
         self.currency = "CRC"  # Moneda por defecto
         self.method = "Efectivo"
+        # Descuentos por método: {"Efectivo": {"total": 95000, "discount": 5000}}
+        self.descuentos = descuentos or {}
+        self.discount = 0.0
         self.cash_received = 0.0
         self.change = 0.0
         self.payment_details: list[dict] = []
@@ -227,6 +232,7 @@ class CobroDialog(QDialog):
         self.setMaximumHeight(720)
         self.setStyleSheet(_COBRO_QSS)
         self._build_ui()
+        self._aplicar_descuento_metodo()
         self._update_change()
 
     # ---------- construcción ----------
@@ -275,6 +281,13 @@ class CobroDialog(QDialog):
         self.total_display.setObjectName("cobroTotalLabel")
         self.total_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._root.addWidget(self.total_display)
+
+        self.discount_display = QLabel("")
+        self.discount_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.discount_display.setStyleSheet(
+            "color: #2fbf71; font-weight: bold;")
+        self.discount_display.setVisible(False)
+        self._root.addWidget(self.discount_display)
 
         self.context_label = QLabel("")
         self.context_label.setObjectName("subtitleLabel")
@@ -425,7 +438,38 @@ class CobroDialog(QDialog):
             self.pages.setCurrentIndex(0)
             self._update_amount_label()
             self.cash_input.setFocus()
+        self._aplicar_descuento_metodo()
         self._update_change()
+
+    def _aplicar_descuento_metodo(self) -> None:
+        """Ajusta el total según el descuento configurado para el método."""
+        info = self.descuentos.get(self.method) if self.descuentos else None
+        descuento = 0.0
+        if info and self.method != "Mixto":
+            descuento = max(0.0, float(info.get("discount") or 0))
+        if descuento > 0:
+            self.discount = round(descuento, 2)
+            self.total_crc = round(
+                float(info.get("total", self.base_total_crc - descuento)), 2)
+        else:
+            self.discount = 0.0
+            self.total_crc = self.base_total_crc
+        if self.currency == "USD":
+            self.total = (round(self.total_crc / self.exchange_rate, 2)
+                          if self.exchange_rate > 0 else 0)
+        else:
+            self.total = self.total_crc
+        self._update_discount_label()
+
+    def _update_discount_label(self) -> None:
+        if self.discount > 0:
+            self.discount_display.setText(
+                f"Descuento {self.method}: "
+                f"−{format_currency(self._from_crc(self.discount), self.currency)}")
+            self.discount_display.setVisible(True)
+        else:
+            self.discount_display.setText("")
+            self.discount_display.setVisible(False)
 
     def _set_currency(self, currency: str) -> None:
         """Cambia la moneda de cobro entre CRC y USD.
@@ -443,6 +487,7 @@ class CobroDialog(QDialog):
         else:
             self.total = self.total_crc
         self._apply_currency_symbols()
+        self._update_discount_label()
         self._update_change()
 
     def _currency_symbol(self) -> str:
@@ -746,4 +791,5 @@ class CobroDialog(QDialog):
             "currency": self.currency,
             "exchange_rate": self.exchange_rate,
             "total_crc": self.total_crc,
+            "discount": self.discount,
         }

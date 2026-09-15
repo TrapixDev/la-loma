@@ -18,7 +18,11 @@ from PyQt6.QtWidgets import (
 )
 
 from database.models import Client
-from utils.helpers import NoWheelComboBox
+from utils.helpers import (
+    ajustar_anchos_encabezado,
+    EmptyStateTable,
+    NoWheelComboBox,
+)
 
 ID_TYPES = [
     ("01", "01 - Cédula Física"),
@@ -188,14 +192,11 @@ class ClientPickerDialog(QDialog):
         search_row.addWidget(self.search_input, 1)
         layout.addLayout(search_row)
 
-        self.table = QTableWidget(0, 4)
+        self.table = EmptyStateTable("No hay clientes registrados.", 0, 4)
         self.table.setHorizontalHeaderLabels(["Identificación", "Nombre", "Correo", "Teléfono"])
         self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.setColumnWidth(0, 130)
-        self.table.setColumnWidth(1, 260)
-        self.table.setColumnWidth(2, 160)
-        self.table.setColumnWidth(3, 110)
+        ajustar_anchos_encabezado(self.table, [145, 260, 160, 110])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -222,6 +223,11 @@ class ClientPickerDialog(QDialog):
         query = self.search_input.text().strip()
         service = self.services["client"]
         clients = service.search(query) if query else service.get_all()
+        if query:
+            self.table.set_empty_message(
+                f"Sin clientes que coincidan con “{query}”.")
+        else:
+            self.table.set_empty_message("No hay clientes registrados.")
         self.table.setRowCount(len(clients))
         for row, client in enumerate(clients):
             values = [
@@ -285,15 +291,11 @@ class ClientWidget(QWidget):
         toolbar.addWidget(refresh_button)
         layout.addLayout(toolbar)
 
-        self.table = QTableWidget(0, 5)
+        self.table = EmptyStateTable("No hay clientes registrados.", 0, 5)
         self.table.setHorizontalHeaderLabels(["Identificación", "Tipo", "Nombre", "Correo", "Teléfono"])
         self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.setColumnWidth(0, 130)
-        self.table.setColumnWidth(1, 140)
-        self.table.setColumnWidth(2, 240)
-        self.table.setColumnWidth(3, 200)
-        self.table.setColumnWidth(4, 130)
+        ajustar_anchos_encabezado(self.table, [145, 140, 240, 200, 130])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -306,8 +308,11 @@ class ClientWidget(QWidget):
         service = self.services["client"]
         if query:
             clients = service.search(query) or []
+            self.table.set_empty_message(
+                f"Sin clientes que coincidan con “{query}”.")
         else:
             clients = service.get_all() or []
+            self.table.set_empty_message("No hay clientes registrados.")
         self.table.setRowCount(len(clients))
         for row, client in enumerate(clients):
             values = [

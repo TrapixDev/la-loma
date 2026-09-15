@@ -9,6 +9,23 @@ Instalación en la PC del negocio (1 vez)
 3. Al abrir el programa por primera vez pide crear el PIN de acceso
    (4 a 6 dígitos). Escríbalo en un lugar seguro.
 
+Si Windows o el antivirus bloquean la instalación
+-------------------------------------------------
+Es normal en programas nuevos sin firma digital; NO es un virus.
+1. Desbloquee el instalador: clic derecho al archivo > Propiedades >
+   abajo marque "Desbloquear" > Aceptar. Luego ejecútelo de nuevo.
+2. Si aparece "Windows protegió su PC" (SmartScreen):
+   "Más información" > "Ejecutar de todas formas".
+3. Si el antivirus pone el programa en cuarentena o lo cierra solo,
+   agregue una exclusión: Seguridad de Windows > Protección antivirus
+   y contra amenazas > Exclusiones > Agregar exclusión > Carpeta, y
+   elija estas dos:
+     - %LOCALAPPDATA%\Programs\PosLaLoma
+     - %APPDATA%\PosLaLoma
+4. Si algo falla al abrir, entre a Configuración > "Probar instalación":
+   muestra el problema y permite copiar el diagnóstico para reportarlo.
+5. El POS guarda los errores en %APPDATA%\PosLaLoma\logs\app.log.
+
 Dónde está cada cosa
 --------------------
 - Programa:   %LOCALAPPDATA%\Programs\PosLaLoma
@@ -82,7 +99,9 @@ Respaldos y restauración
 
 Prueba rápida de instalación (técnico)
 --------------------------------------
-PosLaLoma.exe --selftest   valida base, datos y servicios sin abrir la ventana.
+PosLaLoma.exe --selftest   valida base, datos y servicios sin abrir la
+ventana, e imprime el diagnóstico de instalación (Windows, permisos,
+disco, puerto, impresoras, base de datos).
 
 Seguridad
 ---------

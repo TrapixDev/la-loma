@@ -8,10 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDateEdit,
     QDialog,
     QFileDialog,
     QFrame,
@@ -21,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -37,7 +40,14 @@ from database.models import (
 )
 from modules.credit.credit_service import CreditService
 from network.session import session
-from utils.helpers import format_currency, NoWheelComboBox, calculate_totals
+from utils.helpers import (
+    ajustar_anchos_encabezado,
+    format_currency,
+    EmptyStateTable,
+    NoWheelComboBox,
+    NoWheelSpinBox,
+    calculate_totals,
+)
 
 _CREDIT_DOCS = os.path.join(
     os.environ.get("APPDATA", ""), "PosLaLoma", "documentos", "creditos")
@@ -257,6 +267,10 @@ class PaymentGalleryDialog(QDialog):
         meta.setStyleSheet("font-size: 13px; color: #8b93a3;")
         layout.addWidget(meta)
 
+        self.upload_label = QLabel("")
+        self.upload_label.setStyleSheet("font-size: 13px; color: #2fbf71;")
+        layout.addWidget(self.upload_label)
+
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setMinimumHeight(300)
@@ -323,6 +337,7 @@ class PaymentGalleryDialog(QDialog):
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText("Sin comprobantes adjuntos")
             self.counter_label.setText("0 / 0")
+            self.upload_label.setText("")
             return
         self.counter_label.setText(f"{self.index + 1} / {len(self.images)}")
         self._show_current()
@@ -332,6 +347,8 @@ class PaymentGalleryDialog(QDialog):
         img = self._current()
         if img is None:
             return
+        fecha = img.created_at[:16] if img.created_at else "—"
+        self.upload_label.setText(f"Subido: {fecha}")
         pixmap = QPixmap(img.image_path)
         if pixmap.isNull():
             self.image_label.setPixmap(QPixmap())
@@ -357,7 +374,8 @@ class PaymentGalleryDialog(QDialog):
                 " padding: 2px; background: #1a1f28; }"
                 "QPushButton#thumbnail:checked { border-color: #2fbf71; }")
             desc = img.description or Path(img.image_path).name
-            btn.setToolTip(desc)
+            fecha = img.created_at[:16] if img.created_at else ""
+            btn.setToolTip(f"{desc}\nSubido: {fecha}" if fecha else desc)
             pixmap = QPixmap(img.image_path)
             if not pixmap.isNull():
                 btn.setIcon(QIcon(pixmap.scaled(
@@ -423,6 +441,14 @@ class CreditDetailDialog(QDialog):
         self.summary_label.setStyleSheet("font-size: 14px;")
         layout.addWidget(self.summary_label)
 
+        self.delivery_label = QLabel()
+        self.delivery_label.setStyleSheet("font-size: 14px; color: #8b93a3;")
+        layout.addWidget(self.delivery_label)
+
+        self.financing_label = QLabel()
+        self.financing_label.setStyleSheet("font-size: 14px; color: #2fbf71;")
+        layout.addWidget(self.financing_label)
+
         sep = QFrame()
         sep.setObjectName("separator")
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -437,7 +463,7 @@ class CreditDetailDialog(QDialog):
         history_hint.setStyleSheet("font-size: 13px; color: #8b93a3;")
         layout.addWidget(history_hint)
 
-        self.payments_table = QTableWidget(0, 4)
+        self.payments_table = EmptyStateTable("Sin abonos registrados.", 0, 4)
         self.payments_table.setHorizontalHeaderLabels(
             ["Fecha", "Monto", "Método", "Notas"])
         self.payments_table.horizontalHeader().setObjectName("tableHeader")
@@ -448,6 +474,8 @@ class CreditDetailDialog(QDialog):
             QTableWidget.EditTrigger.NoEditTriggers)
         self.payments_table.setAlternatingRowColors(True)
         self.payments_table.doubleClicked.connect(self._open_payment_gallery)
+        self.payments_table.itemSelectionChanged.connect(
+            self._update_attach_state)
         layout.addWidget(self.payments_table, 1)
 
         btn_row = QHBoxLayout()
@@ -455,6 +483,20 @@ class CreditDetailDialog(QDialog):
         self.pay_button.setObjectName("primaryButton")
         self.pay_button.clicked.connect(self._open_payment)
         btn_row.addWidget(self.pay_button)
+        self.attach_button = QPushButton("Adjuntar comprobante")
+        self.attach_button.setObjectName("secondaryButton")
+        self.attach_button.setToolTip(
+            "Adjunta una o varias imágenes a un abono ya registrado "
+            "(seleccione la fila del abono).")
+        self.attach_button.setEnabled(False)
+        self.attach_button.clicked.connect(self._attach_to_payment)
+        btn_row.addWidget(self.attach_button)
+        self.deliver_button = QPushButton("Entregar")
+        self.deliver_button.setObjectName("secondaryButton")
+        self.deliver_button.setToolTip(
+            "Marca el encargo como entregado; si hay saldo, lo cobra primero.")
+        self.deliver_button.clicked.connect(self._deliver)
+        btn_row.addWidget(self.deliver_button)
         btn_row.addStretch(1)
         close_btn = QPushButton("Cerrar")
         close_btn.clicked.connect(self.accept)
@@ -478,6 +520,27 @@ class CreditDetailDialog(QDialog):
             f"{format_currency(a.balance)}</span>  |  "
             f"Estado: {a.status.upper()}")
         self.pay_button.setEnabled(a.status == "pendiente")
+        es_encargo = (a.account_type or "credito") != "credito"
+        if es_encargo:
+            if a.delivery_status == "entregado":
+                fecha = a.delivered_at[:16] if a.delivered_at else ""
+                self.delivery_label.setText(
+                    f"Entrega: ENTREGADO{' el ' + fecha if fecha else ''}")
+            else:
+                pactada = f"  |  Pactada: {a.due_date}" if a.due_date else ""
+                self.delivery_label.setText(f"Entrega: PENDIENTE{pactada}")
+            self.deliver_button.setVisible(True)
+            self.deliver_button.setEnabled(
+                a.delivery_status != "entregado" and a.status != "anulada")
+        else:
+            self.delivery_label.setText("")
+            self.deliver_button.setVisible(False)
+        if a.financing_months and a.financing_installment:
+            self.financing_label.setText(
+                f"Plan: {a.financing_months} meses de "
+                f"{format_currency(a.financing_installment)} (sin intereses)")
+        else:
+            self.financing_label.setText("")
         svc: CreditService = self.services["credit"]
         payments = svc.get_payments(a.id)
         self.payments_table.setRowCount(len(payments))
@@ -515,6 +578,48 @@ class CreditDetailDialog(QDialog):
         dialog = PaymentGalleryDialog(payment, self.services, parent=self)
         dialog.exec()
 
+    def _selected_payment(self):
+        row = self.payments_table.currentRow()
+        if row < 0:
+            return None
+        item = self.payments_table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _update_attach_state(self) -> None:
+        self.attach_button.setEnabled(self._selected_payment() is not None)
+
+    def _attach_to_payment(self) -> None:
+        """Adjunta comprobantes a un abono ya registrado (con fecha de subida)."""
+        payment = self._selected_payment()
+        if payment is None:
+            QMessageBox.information(
+                self, "Comprobantes",
+                "Seleccione un abono en el historial para adjuntarle "
+                "comprobantes.")
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Seleccionar comprobantes", "",
+            "Imágenes (*.png *.jpg *.jpeg *.webp *.bmp);;Todos los archivos (*)")
+        if not paths:
+            return
+        svc: CreditService = self.services["credit"]
+        docs_dir = _ensure_docs_dir()
+        agregadas = 0
+        for path in paths:
+            ext = Path(path).suffix or ".jpg"
+            dest = Path(docs_dir) / f"pago_{payment.id}_{uuid4().hex[:8]}{ext}"
+            try:
+                shutil.copy2(path, dest)
+                svc.add_payment_image(payment.id, str(dest), "")
+                agregadas += 1
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "Comprobantes",
+                    f"No se pudo adjuntar {Path(path).name}:\n{exc}")
+        if agregadas:
+            self._load_data()
+            self.data_changed.emit()
+
     def _open_payment(self) -> None:
         svc: CreditService = self.services["credit"]
         account = svc.get_by_id(self.account.id)
@@ -526,19 +631,163 @@ class CreditDetailDialog(QDialog):
             self._load_data()
             self.data_changed.emit()
 
+    def _deliver(self) -> None:
+        """Entrega el encargo: cobra el saldo si hace falta y marca entregado."""
+        svc: CreditService = self.services["credit"]
+        account = svc.get_by_id(self.account.id)
+        if account is None:
+            return
+        if float(account.balance or 0) > 0:
+            answer = QMessageBox.question(
+                self, "Entregar encargo",
+                f"Saldo pendiente: {format_currency(account.balance)}.\n"
+                f"¿Cobrar el saldo y marcar como entregado?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            dialog = PaymentDialog(account, self.services, parent=self)
+            if not (dialog.exec() and dialog.payment_id is not None):
+                return
+            account = svc.get_by_id(account.id) or account
+            if float(account.balance or 0) > 0:
+                answer = QMessageBox.question(
+                    self, "Saldo pendiente",
+                    f"Queda un saldo de {format_currency(account.balance)}.\n"
+                    f"¿Marcar el encargo como entregado de todas formas?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+        svc.mark_delivered(account.id)
+        self._generar_factura(account)
+        self.account = svc.get_by_id(account.id) or account
+        self._load_data()
+        self.data_changed.emit()
+
+    def _items_para_factura(self, sale) -> list[dict]:
+        """Reconstruye las líneas (con CABYS/IVA) para el XML de la factura."""
+        product_svc = self.services.get("product")
+        items = []
+        for item in sale.items or []:
+            product = None
+            if product_svc is not None:
+                try:
+                    product = product_svc.get_by_id(item.product_id)
+                except Exception:
+                    product = None
+            items.append({
+                "product_id": item.product_id,
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "unit_price": item.unit_price,
+                "tax_rate": float(getattr(product, "tax_rate", 0.0) or 0.0),
+                "discount": item.discount,
+                "cabys_code": getattr(product, "cabys_code", "") or "",
+                "total": item.total,
+            })
+        return items
+
+    def _generar_factura(self, account) -> None:
+        """Genera la factura del encargo entregado y ofrece imprimirla.
+
+        Arma el respaldo XML de la factura electrónica (si hay cliente) e
+        intenta enviarlo al proveedor FE; el PDF se genera siempre.
+        """
+        db = self.services.get("db")
+        cart_svc = self.services.get("cart")
+        if db is None or cart_svc is None:
+            return
+        try:
+            from modules.documentos.factura_service import (
+                generar_documentos,
+                reimprimir_factura,
+            )
+            from modules.documentos.xml_factura import (
+                build_factura_payload,
+                cargar_empresa,
+            )
+            saved = cart_svc.get_sale(account.sale_id)
+            if saved is None:
+                return
+            company = cargar_empresa(db)
+            clave = ""
+            payload = None
+            client = None
+            simplificada = (saved.invoice_type or "general") == "simplificada"
+            if saved.client_id and not simplificada:
+                client = self.services["client"].get_by_id(saved.client_id)
+            if client is not None:
+                totals = {
+                    "subtotal": saved.subtotal,
+                    "discount": saved.discount,
+                    "tax_amount": saved.tax_amount,
+                    "total": saved.total,
+                }
+                consecutivo = (f"{company.get('branch', '001')}-"
+                               f"{company.get('terminal', '001')}-"
+                               f"{saved.id:010d}")
+                payload = build_factura_payload(
+                    company, client, self._items_para_factura(saved),
+                    totals, consecutivo)
+                try:
+                    response = self.services["hacienda"].send_electronic_invoice(
+                        payload)
+                except Exception:
+                    response = None
+                if response:
+                    clave = str(response.get("clave", ""))
+                    estado = "ACEPTADA" if clave else "ENVIADA"
+                    try:
+                        cart_svc.update_hacienda_status(saved.id, clave, estado)
+                    except Exception:
+                        pass
+            resultado = generar_documentos(
+                saved, company, payload=payload, clave=clave, medio_pago="01")
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Factura del encargo",
+                f"El encargo se entregó, pero no se pudo generar la "
+                f"factura:\n{exc}")
+            return
+        destino = resultado.get("pdf") or resultado.get("carpeta") or ""
+        answer = QMessageBox.question(
+            self, "Factura del encargo",
+            f"Encargo entregado. Factura guardada en:\n{destino}\n\n"
+            f"¿Imprimir la factura ahora?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            reimprimir_factura(db, cart_svc, account.sale_id, imprimir=True)
+
 
 class CreditSaleDialog(QDialog):
-    """Diálogo para crear una venta a crédito: cliente + productos + confirmación."""
+    """Diálogo para crear una venta a crédito o un encargo/apartado.
+
+    `mode="encargo"` agrega prima (opcional) y fecha de entrega pactada.
+    """
 
     def __init__(self, services: dict, cart: list[dict] | None = None,
-                 client=None, parent: QWidget | None = None):
+                 client=None, mode: str = "credito",
+                 invoice_type: str = "general",
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.services = services
         self.cart: list[dict] = [dict(item) for item in cart] if cart else []
         self.client = client
-        self.setWindowTitle("Nueva Venta a Crédito")
-        self.setMinimumSize(700, 520)
+        self.mode = mode
+        self._promo_result: dict = {}
+        es_encargo = mode == "encargo"
+        self.setWindowTitle("Nuevo Encargo" if es_encargo
+                            else "Nueva Venta a Crédito")
+        self.setMinimumSize(700, 560 if es_encargo else 520)
         self._setup_ui()
+        index = self.invoice_combo.findData(invoice_type)
+        if index >= 0:
+            self.invoice_combo.setCurrentIndex(index)
         if client:
             self._set_client(client)
         if self.cart:
@@ -549,24 +798,42 @@ class CreditSaleDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        client_row = QHBoxLayout()
-        client_label = QLabel("Cliente:")
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        top_row.addWidget(QLabel("Cliente:"))
         self.client_label = QLabel("Sin cliente seleccionado")
         self.client_label.setStyleSheet("font-weight: bold; font-size: 15px;")
+        self.client_label.setMinimumWidth(120)
+        self.client_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        top_row.addWidget(self.client_label, 1)
         pick_btn = QPushButton("Seleccionar Cliente")
         pick_btn.setObjectName("primaryButton")
         pick_btn.clicked.connect(self._pick_client)
-        client_row.addWidget(client_label)
-        client_row.addWidget(self.client_label, 1)
-        client_row.addWidget(pick_btn)
-        layout.addLayout(client_row)
+        top_row.addWidget(pick_btn)
+        top_row.addSpacing(12)
+        top_row.addWidget(QLabel("Documento:"))
+        self.invoice_combo = NoWheelComboBox()
+        self.invoice_combo.addItem("Factura Electrónica", "general")
+        self.invoice_combo.addItem("Fact. Simplificada", "simplificada")
+        self.invoice_combo.setToolTip(
+            "La simplificada no cobra IVA. La electrónica usa el XML de "
+            "respaldo al entregar.")
+        self.invoice_combo.setMinimumWidth(150)
+        self.invoice_combo.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.invoice_combo.currentIndexChanged.connect(
+            lambda _: self._update_cart_display())
+        top_row.addWidget(self.invoice_combo)
+        layout.addLayout(top_row)
 
         sep = QFrame()
         sep.setObjectName("separator")
         sep.setFrameShape(QFrame.Shape.HLine)
         layout.addWidget(sep)
 
-        self.cart_table = QTableWidget(0, 4)
+        self.cart_table = EmptyStateTable(
+            "Sin productos en el carrito.", 0, 4)
         self.cart_table.setHorizontalHeaderLabels(
             ["Producto", "Cant", "Precio", "Total"])
         self.cart_table.horizontalHeader().setObjectName("tableHeader")
@@ -595,7 +862,8 @@ class CreditSaleDialog(QDialog):
         self.product_hint.setStyleSheet("font-size: 13px; color: #8b93a3;")
         layout.addWidget(self.product_hint)
 
-        self.product_list = QTableWidget(0, 3)
+        self.product_list = EmptyStateTable(
+            "Sin productos disponibles.", 0, 3)
         self.product_list.setHorizontalHeaderLabels(["Nombre", "Precio", "Agregar"])
         self.product_list.horizontalHeader().setObjectName("tableHeader")
         self.product_list.horizontalHeader().setSectionResizeMode(
@@ -612,16 +880,76 @@ class CreditSaleDialog(QDialog):
 
         totals_row = QHBoxLayout()
         self.subtotal_label = QLabel("Subtotal: ₡0.00")
+        self.discount_label = QLabel("Descuento: ₡0.00")
         self.tax_label = QLabel("IVA: ₡0.00")
         self.total_label = QLabel("TOTAL: ₡0.00")
         self.total_label.setStyleSheet(
             "font-size: 17px; font-weight: bold; color: #2fbf71;")
         totals_row.addWidget(self.subtotal_label)
         totals_row.addStretch(1)
+        totals_row.addWidget(self.discount_label)
+        totals_row.addStretch(1)
         totals_row.addWidget(self.tax_label)
         totals_row.addStretch(1)
         totals_row.addWidget(self.total_label)
         layout.addLayout(totals_row)
+
+        self.promo_label = QLabel("")
+        self.promo_label.setWordWrap(True)
+        self.promo_label.setStyleSheet("font-size: 13px; color: #2fbf71;")
+        layout.addWidget(self.promo_label)
+
+        self.conditions_sep = QFrame()
+        self.conditions_sep.setObjectName("separator")
+        self.conditions_sep.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(self.conditions_sep)
+
+        self.conditions_title = QLabel("Condiciones")
+        self.conditions_title.setObjectName("cartSectionTitle")
+        layout.addWidget(self.conditions_title)
+
+        self.order_row = QWidget()
+        order_layout = QHBoxLayout(self.order_row)
+        order_layout.setContentsMargins(0, 0, 0, 0)
+        order_layout.setSpacing(8)
+        prima_label = QLabel("Prima:")
+        self.prima_input = NoWheelSpinBox()
+        self.prima_input.setRange(0.0, 99_999_999.0)
+        self.prima_input.setDecimals(2)
+        self.prima_input.setPrefix("₡ ")
+        self.prima_method = NoWheelComboBox()
+        self.prima_method.addItems(["Efectivo", "Sinpe", "Tarjeta"])
+        self.deliver_check = QCheckBox("Fecha de entrega pactada")
+        self.due_date_input = QDateEdit(QDate.currentDate())
+        self.due_date_input.setCalendarPopup(True)
+        self.due_date_input.setDisplayFormat("dd/MM/yyyy")
+        self.due_date_input.setEnabled(False)
+        self.deliver_check.toggled.connect(self.due_date_input.setEnabled)
+        order_layout.addWidget(prima_label)
+        order_layout.addWidget(self.prima_input)
+        order_layout.addWidget(self.prima_method)
+        order_layout.addWidget(self.deliver_check)
+        order_layout.addWidget(self.due_date_input)
+        order_layout.addStretch(1)
+        self.order_row.setVisible(self.mode == "encargo")
+        layout.addWidget(self.order_row)
+
+        self.plan_row = QWidget()
+        plan_layout = QHBoxLayout(self.plan_row)
+        plan_layout.setContentsMargins(0, 0, 0, 0)
+        plan_layout.setSpacing(8)
+        plan_layout.addWidget(QLabel("Plan:"))
+        self.plan_combo = NoWheelComboBox()
+        self.plan_combo.addItem("Contado (sin plan)", 0)
+        plan_layout.addWidget(self.plan_combo)
+        plan_hint = QLabel("Meses sin intereses (promoción)")
+        plan_hint.setStyleSheet("font-size: 13px; color: #8b93a3;")
+        plan_layout.addWidget(plan_hint)
+        plan_layout.addStretch(1)
+        self.plan_row.setVisible(False)
+        layout.addWidget(self.plan_row)
+        self._financing: dict | None = None
+        self._update_conditions_visibility()
 
         notes_row = QHBoxLayout()
         notes_label = QLabel("Notas:")
@@ -632,11 +960,15 @@ class CreditSaleDialog(QDialog):
         layout.addLayout(notes_row)
 
         btn_row = QHBoxLayout()
-        confirm_btn = QPushButton("Confirmar Venta a Crédito")
+        confirm_btn = QPushButton(
+            "Confirmar Encargo" if self.mode == "encargo"
+            else "Confirmar Venta a Crédito")
         confirm_btn.setObjectName("primaryButton")
         confirm_btn.clicked.connect(self._confirm)
         cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setObjectName("secondaryButton")
         cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch(1)
         btn_row.addWidget(confirm_btn)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
@@ -646,6 +978,7 @@ class CreditSaleDialog(QDialog):
         name = getattr(client, "name", "?")
         id_num = getattr(client, "id_number", "")
         self.client_label.setText(f"{name} ({id_num})")
+        self.client_label.setToolTip(f"{name} ({id_num})")
 
     def _pick_client(self) -> None:
         from modules.clients.client_widget import ClientPickerDialog
@@ -670,8 +1003,9 @@ class CreditSaleDialog(QDialog):
             add_btn.setToolTip(f"Agregar {p.name}")
             add_btn.clicked.connect(lambda _, prod=p: self._add_product(prod))
             self.product_list.setCellWidget(row, 2, add_btn)
-        self.product_list.setColumnWidth(1, 100)
-        self.product_list.setColumnWidth(2, 70)
+        self.product_list.setColumnWidth(1, 104)
+        self.product_list.setColumnWidth(2, 92)
+        ajustar_anchos_encabezado(self.product_list, {1: 104, 2: 92})
         self.product_list.setVisible(True)
 
     def _add_product(self, product) -> None:
@@ -707,7 +1041,56 @@ class CreditSaleDialog(QDialog):
             del self.cart[row]
             self._update_cart_display()
 
+    def _aplicar_promociones(self) -> dict:
+        """Aplica promociones de producto y calcula el plan de financiamiento."""
+        service = None
+        if isinstance(self.services, dict):
+            service = self.services.get("promotions")
+        for item in self.cart:
+            item["discount"] = 0.0
+        self._promo_result = {}
+        if service is None or not self.cart:
+            self._update_financing_options({})
+            return {}
+        try:
+            resultado = service.evaluate(
+                self.cart, es_credito=(self.mode == "credito"))
+        except Exception:
+            self._update_financing_options({})
+            return {}
+        for index, amount in (resultado.get("line_discounts") or {}).items():
+            try:
+                self.cart[int(index)]["discount"] = float(amount)
+            except (IndexError, TypeError, ValueError):
+                continue
+        self._promo_result = resultado
+        self._update_financing_options(resultado)
+        return resultado
+
+    def _update_financing_options(self, resultado: dict) -> None:
+        """Llena el selector de plan "meses sin intereses" si la promo aplica."""
+        financing = (resultado or {}).get("financing")
+        self._financing = financing
+        self.plan_combo.blockSignals(True)
+        self.plan_combo.clear()
+        self.plan_combo.addItem("Contado (sin plan)", 0)
+        if financing:
+            for months in financing.get("months") or []:
+                cuota = (financing.get("installments") or {}).get(str(months), 0.0)
+                self.plan_combo.addItem(
+                    f"{months} meses de {format_currency(cuota)}", int(months))
+        self.plan_combo.blockSignals(False)
+        self.plan_row.setVisible(bool(financing) and self.mode == "credito")
+        self._update_conditions_visibility()
+
+    def _update_conditions_visibility(self) -> None:
+        """Muestra el bloque "Condiciones" solo si hay campos de condiciones."""
+        visible = (not self.order_row.isHidden()) or (not self.plan_row.isHidden())
+        self.conditions_sep.setVisible(visible)
+        self.conditions_title.setVisible(visible)
+
     def _update_cart_display(self) -> None:
+        resultado = self._aplicar_promociones()
         self.cart_table.setRowCount(len(self.cart))
         for row, item in enumerate(self.cart):
             item["total"] = (
@@ -727,13 +1110,26 @@ class CreditSaleDialog(QDialog):
                         | Qt.AlignmentFlag.AlignVCenter)
                 self.cart_table.setItem(row, col, cell)
         self.cart_table.resizeRowsToContents()
-        totals = calculate_totals(self.cart)
+        simplificada = self.invoice_combo.currentData() == "simplificada"
+        totals = calculate_totals(self.cart, exento=simplificada)
         self.subtotal_label.setText(
             f"Subtotal: {format_currency(totals['subtotal'])}")
+        self.discount_label.setText(
+            f"Descuento: {format_currency(totals['discount'])}")
         self.tax_label.setText(
             f"IVA: {format_currency(totals['tax_amount'])}")
         self.total_label.setText(
             f"TOTAL: {format_currency(totals['total'])}")
+        aplicadas = (resultado or {}).get("applied") or []
+        if aplicadas:
+            texto = " · ".join(
+                f"{promo['name']} (−{format_currency(promo['amount'])})"
+                for promo in aplicadas)
+            self.promo_label.setText(f"Promos: {texto}")
+            self.discount_label.setToolTip(texto)
+        else:
+            self.promo_label.setText("")
+            self.discount_label.setToolTip("")
 
     def _confirm(self) -> None:
         if not self.cart:
@@ -744,15 +1140,46 @@ class CreditSaleDialog(QDialog):
         if self.client is None:
             QMessageBox.warning(
                 self, "Cliente requerido",
-                "Seleccione un cliente para la venta a crédito.")
+                "Seleccione un cliente para continuar.")
             return
-        totals = calculate_totals(self.cart)
+        es_encargo = self.mode == "encargo"
+        simplificada = self.invoice_combo.currentData() == "simplificada"
+        totals = calculate_totals(self.cart, exento=simplificada)
+        prima = float(self.prima_input.value()) if es_encargo else 0.0
+        if prima > totals["total"]:
+            QMessageBox.warning(
+                self, "Prima inválida",
+                f"La prima ({format_currency(prima)}) no puede superar el "
+                f"total ({format_currency(totals['total'])}).")
+            return
+        due_date = ""
+        if es_encargo and self.deliver_check.isChecked():
+            due_date = self.due_date_input.date().toString("yyyy-MM-dd")
+        financing_months = 0
+        financing_installment = 0.0
+        if self.mode == "credito" and self.plan_row.isVisible():
+            months = int(self.plan_combo.currentData() or 0)
+            if months > 0:
+                financing_months = months
+                financing_installment = float(
+                    (self._financing or {}).get("installments", {}).get(
+                        str(months), 0.0))
+        titulo = "Confirmar Encargo" if es_encargo else "Confirmar Venta a Crédito"
+        resumen = (f"Cliente: {self.client.name}\n"
+                   f"Total: {format_currency(totals['total'])}\n")
+        if es_encargo:
+            resumen += f"Prima: {format_currency(prima)}\n"
+            if due_date:
+                resumen += f"Entrega pactada: {due_date}\n"
+            resumen += "\n¿Confirmar el encargo?"
+        else:
+            if financing_months > 0:
+                resumen += (f"Plan: {financing_months} meses de "
+                            f"{format_currency(financing_installment)} "
+                            f"(sin intereses)\n")
+            resumen += "\n¿Confirmar la venta a crédito?"
         answer = QMessageBox.question(
-            self,
-            "Confirmar Venta a Crédito",
-            f"Cliente: {self.client.name}\n"
-            f"Total: {format_currency(totals['total'])}\n\n"
-            f"¿Confirmar la venta a crédito?",
+            self, titulo, resumen,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -774,7 +1201,9 @@ class CreditSaleDialog(QDialog):
                 cash_received=0.0,
                 change_amount=0.0,
                 payment_details="",
-                invoice_type="general",
+                promotions_applied=json.dumps(
+                    self._promo_result.get("applied") or [], ensure_ascii=False),
+                invoice_type="simplificada" if simplificada else "general",
                 sale_reference=uuid4().hex,
                 currency="CRC",
                 exchange_rate=0.0,
@@ -804,17 +1233,27 @@ class CreditSaleDialog(QDialog):
                 for item in self.cart
             ]
             sale_id = cart_svc.create_sale(
-                sale, items, credit_notes=self.notes_input.text().strip())
+                sale, items,
+                credit_notes=self.notes_input.text().strip(),
+                account_type="encargo" if es_encargo else "credito",
+                due_date=due_date,
+                prima=prima,
+                prima_method=(self.prima_method.currentText().lower()
+                              if es_encargo else "efectivo"),
+                financing_months=financing_months,
+                financing_installment=financing_installment,
+            )
             created = cart_svc.get_sale(sale_id)
             invoice_number = created.invoice_number if created else ""
+            etiqueta = "Encargo" if es_encargo else "Venta a crédito"
             QMessageBox.information(
-                self, "Venta registrada",
-                f"Venta a crédito #{invoice_number} creada correctamente.")
+                self, "Registro exitoso",
+                f"{etiqueta} #{invoice_number} registrado correctamente.")
             self.accept()
         except Exception as exc:
             QMessageBox.critical(
                 self, "Error",
-                f"No se pudo crear la venta a crédito:\n{exc}")
+                f"No se pudo registrar:\n{exc}")
 
 
 class CreditWidget(QWidget):
@@ -831,7 +1270,7 @@ class CreditWidget(QWidget):
         layout = QVBoxLayout(self)
 
         header = QHBoxLayout()
-        title = QLabel("Cuentas por Cobrar")
+        title = QLabel("Crédito y Encargos")
         title.setObjectName("sectionTitle")
         header.addWidget(title)
         header.addStretch(1)
@@ -839,8 +1278,11 @@ class CreditWidget(QWidget):
 
         toolbar = QWidget()
         toolbar.setObjectName("reportToolbar")
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(10, 8, 10, 8)
+        toolbar_root = QVBoxLayout(toolbar)
+        toolbar_root.setContentsMargins(10, 8, 10, 8)
+        toolbar_root.setSpacing(6)
+
+        toolbar_layout = QHBoxLayout()
         toolbar_layout.setSpacing(8)
 
         self.search_input = QLineEdit()
@@ -848,23 +1290,45 @@ class CreditWidget(QWidget):
         self.search_input.textChanged.connect(lambda _: self.refresh())
         toolbar_layout.addWidget(self.search_input, 1)
 
+        self.type_combo = NoWheelComboBox()
+        self.type_combo.addItems(["Todos", "Créditos", "Encargos"])
+        self.type_combo.currentIndexChanged.connect(lambda _: self.refresh())
+        toolbar_layout.addWidget(self.type_combo)
+
         self.filter_combo = NoWheelComboBox()
         self.filter_combo.addItems(["Todas", "Pendientes", "Pagadas", "Anuladas"])
         self.filter_combo.currentIndexChanged.connect(lambda _: self.refresh())
         toolbar_layout.addWidget(self.filter_combo)
 
         toolbar_layout.addStretch(1)
+        toolbar_root.addLayout(toolbar_layout)
+
+        actions_layout = QHBoxLayout()
+        actions_layout.setSpacing(8)
 
         self.new_sale_button = QPushButton("Nueva Venta a Crédito")
         self.new_sale_button.setObjectName("primaryButton")
         self.new_sale_button.clicked.connect(self._open_new_sale)
-        toolbar_layout.addWidget(self.new_sale_button)
+        actions_layout.addWidget(self.new_sale_button)
+
+        self.new_order_button = QPushButton("Nuevo Encargo")
+        self.new_order_button.setObjectName("primaryButton")
+        self.new_order_button.setToolTip(
+            "Encargo o apartado: registra la prima (opcional) y el saldo "
+            "contra entrega.")
+        self.new_order_button.clicked.connect(self._open_new_order)
+        actions_layout.addWidget(self.new_order_button)
+
+        actions_layout.addStretch(1)
 
         self.pay_button = QPushButton("Registrar Abono")
-        self.pay_button.setObjectName("primaryButton")
+        self.pay_button.setObjectName("secondaryButton")
+        self.pay_button.setToolTip(
+            "Seleccione una cuenta pendiente de la tabla para abonar.")
         self.pay_button.clicked.connect(self._open_payment)
         self.pay_button.setEnabled(False)
-        toolbar_layout.addWidget(self.pay_button)
+        actions_layout.addWidget(self.pay_button)
+        toolbar_root.addLayout(actions_layout)
 
         layout.addWidget(toolbar)
 
@@ -874,6 +1338,7 @@ class CreditWidget(QWidget):
             ("pendiente", "Pendiente"),
             ("pagado", "Pagado"),
             ("cuentas", "Cuentas"),
+            ("encargos", "Encargos"),
         ):
             frame = QFrame()
             frame.setObjectName("statCard")
@@ -889,10 +1354,11 @@ class CreditWidget(QWidget):
             self.card_labels[key] = value_label
         layout.addLayout(cards)
 
-        self.table = QTableWidget(0, 7)
+        self.table = EmptyStateTable(
+            "No hay cuentas por cobrar con los filtros actuales.", 0, 8)
         self.table.setHorizontalHeaderLabels([
             "Cliente", "Identificación", "Factura", "Total",
-            "Pagado", "Saldo", "Estado"])
+            "Pagado", "Saldo", "Estado", "Entrega"])
         self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setColumnWidth(0, 180)
@@ -902,6 +1368,7 @@ class CreditWidget(QWidget):
         self.table.setColumnWidth(4, 110)
         self.table.setColumnWidth(5, 110)
         self.table.setColumnWidth(6, 90)
+        self.table.setColumnWidth(7, 110)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -916,9 +1383,12 @@ class CreditWidget(QWidget):
         svc: CreditService = self.services["credit"]
         status_map = {"Todas": "", "Pendientes": "pendiente",
                       "Pagadas": "pagada", "Anuladas": "anulada"}
+        type_map = {"Todos": "", "Créditos": "credito", "Encargos": "encargo"}
         status = status_map.get(self.filter_combo.currentText(), "")
+        tipo = type_map.get(self.type_combo.currentText(), "")
         search = self.search_input.text().strip()
-        accounts = svc.get_all(status_filter=status, client_search=search)
+        accounts = svc.get_all(status_filter=status, client_search=search,
+                               type_filter=tipo)
         self.table.setRowCount(len(accounts))
         for row, a in enumerate(accounts):
             if a.status == "pagada":
@@ -927,6 +1397,13 @@ class CreditWidget(QWidget):
                 status_icon = "⚪"
             else:
                 status_icon = "🟡"
+            es_encargo = (a.account_type or "credito") != "credito"
+            if not es_encargo:
+                entrega = "—"
+            elif a.delivery_status == "entregado":
+                entrega = "Entregado"
+            else:
+                entrega = "Pendiente"
             values = [
                 a.client_name,
                 a.client_id_number or "",
@@ -935,10 +1412,13 @@ class CreditWidget(QWidget):
                 format_currency(a.amount_paid),
                 format_currency(a.balance),
                 f"{status_icon} {a.status.capitalize()}",
+                entrega,
             ]
             for col, val in enumerate(values):
                 item = QTableWidgetItem(str(val))
                 if col == 5 and a.status == "pendiente":
+                    item.setForeground(Qt.GlobalColor.yellow)
+                elif col == 7 and es_encargo and a.delivery_status != "entregado":
                     item.setForeground(Qt.GlobalColor.yellow)
                 self.table.setItem(row, col, item)
             self.table.item(row, 0).setData(
@@ -951,6 +1431,11 @@ class CreditWidget(QWidget):
             format_currency(summary["total_pagado"]))
         self.card_labels["cuentas"].setText(
             str(summary["total_cuentas"]))
+        self.card_labels["encargos"].setText(
+            str(summary["encargos_pendientes"]))
+        self.card_labels["encargos"].setToolTip(
+            f"Saldo pendiente de encargos: "
+            f"{format_currency(summary['total_encargos'])}")
 
     def _selected_account(self) -> CreditAccount | None:
         row = self.table.currentRow()
@@ -997,13 +1482,15 @@ class CreditWidget(QWidget):
             self.refresh()
             self.data_changed.emit()
 
-    def start_new_credit_sale(self, cart: list[dict], client) -> bool:
+    def start_new_credit_sale(self, cart: list[dict], client,
+                              invoice_type: str = "general") -> bool:
         """Called from POS when 'Venta a Crédito' is clicked.
 
         Devuelve True si la venta a crédito se registró correctamente.
         """
         dialog = CreditSaleDialog(
-            self.services, cart=cart, client=client, parent=self)
+            self.services, cart=cart, client=client,
+            invoice_type=invoice_type, parent=self)
         if dialog.exec():
             self.refresh()
             self.data_changed.emit()
@@ -1012,6 +1499,12 @@ class CreditWidget(QWidget):
 
     def _open_new_sale(self) -> None:
         dialog = CreditSaleDialog(self.services, parent=self)
+        if dialog.exec():
+            self.refresh()
+            self.data_changed.emit()
+
+    def _open_new_order(self) -> None:
+        dialog = CreditSaleDialog(self.services, mode="encargo", parent=self)
         if dialog.exec():
             self.refresh()
             self.data_changed.emit()

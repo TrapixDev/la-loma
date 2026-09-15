@@ -1,4 +1,4 @@
-; Inno Setup script del POS La Loma
+﻿; Inno Setup script del POS La Loma
 ; Compila: ISCC.exe PosLaLoma.iss /DVersion=1.0.0 /DOutput=E:\ruta
 ; Instala por usuario (%LOCALAPPDATA%\Programs\PosLaLoma) para que las
 ; actualizaciones no pidan permisos de administrador.
@@ -37,6 +37,38 @@ AppMutex=PosLaLomaMutex
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+
+[Messages]
+FinishedLabel=La instalación de POS La Loma finalizó.%n%nSi Windows o el antivirus bloquean el POS:%n  1) Clic derecho al instalador > Propiedades > marque "Desbloquear" y vuelva a ejecutarlo.%n  2) Si SmartScreen lo bloquea: "Más información" > "Ejecutar de todas formas".%n  3) En Seguridad de Windows agregue una exclusión (Protección antivirus > Exclusiones) para la carpeta del programa y para AppData\Roaming\PosLaLoma.%n%nSi algo falla, entre a Configuración > "Probar instalación" y copie el diagnóstico.
+
+[Code]
+function InitializeSetup(): Boolean;
+var
+  Version: TWindowsVersion;
+begin
+  GetWindowsVersionEx(Version);
+  if Version.Major < 10 then
+  begin
+    MsgBox('POS La Loma requiere Windows 10 o superior.' + #13#10 +
+           'Este equipo tiene una versión anterior de Windows.',
+           mbCriticalError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  Result := True;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  { Cierra la app y su servidor local (--server) para poder reemplazar los
+    archivos; si no se cierran, quedarían bloqueando la instalación. }
+  Exec('taskkill.exe', '/F /IM PosLaLoma.exe', '', SW_HIDE,
+       ewWaitUntilTerminated, ResultCode);
+  Sleep(500);
+  Result := '';
+end;
 
 [Tasks]
 Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; GroupDescription: "Accesos directos:"

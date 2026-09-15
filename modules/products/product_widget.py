@@ -27,7 +27,13 @@ from PyQt6.QtWidgets import (
 
 from database.models import Product
 from network.image_store import ImageStore
-from utils.helpers import format_currency, NoWheelSpinBox, NoWheelComboBox
+from utils.helpers import (
+    ajustar_anchos_encabezado,
+    format_currency,
+    EmptyStateTable,
+    NoWheelSpinBox,
+    NoWheelComboBox,
+)
 
 TAX_TYPES = [("gravado", "Gravado (IVA)"), ("exento", "Exento")]
 
@@ -527,21 +533,15 @@ class ProductWidget(QWidget):
         toolbar.addWidget(refresh_button)
         layout.addLayout(toolbar)
 
-        self.table = QTableWidget(0, 9)
+        self.table = EmptyStateTable(
+            "Aún no hay productos registrados.", 0, 9)
         self.table.setHorizontalHeaderLabels(
             ["Foto", "Código", "Tipo de Madera", "Nombre", "Categoría", "Precio Venta", "Costo Fab.", "IVA", "Estado"]
         )
         self.table.horizontalHeader().setObjectName("tableHeader")
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.setColumnWidth(0, 70)
-        self.table.setColumnWidth(1, 80)
-        self.table.setColumnWidth(2, 120)
-        self.table.setColumnWidth(3, 180)
-        self.table.setColumnWidth(4, 110)
-        self.table.setColumnWidth(5, 90)
-        self.table.setColumnWidth(6, 90)
-        self.table.setColumnWidth(7, 50)
-        self.table.setColumnWidth(8, 70)
+        ajustar_anchos_encabezado(
+            self.table, [70, 90, 150, 190, 115, 115, 105, 55, 85])
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -568,8 +568,11 @@ class ProductWidget(QWidget):
         service = self.services["product"]
         if query:
             products = service.search(query, category_id) or []
+            self.table.set_empty_message(
+                f"Sin productos que coincidan con “{query}”.")
         else:
             products = service.get_all(category_id=category_id, active_only=False) or []
+            self.table.set_empty_message("Aún no hay productos registrados.")
         self.table.setRowCount(len(products))
         self._thumb_rows: dict[int, int] = {}
         for row, product in enumerate(products):

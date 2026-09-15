@@ -4,8 +4,8 @@ from database.models import Sale, SaleItem
 SALE_SELECT = """
 SELECT s.id, s.invoice_number, s.client_id, c.name AS client_name, s.subtotal,
        s.discount, s.tax_amount, s.total, s.payment_method, s.cash_received,
-       s.change_amount, s.payment_details, s.invoice_type, s.currency,
-       s.exchange_rate, s.status,
+       s.change_amount, s.payment_details, s.promotions_applied, s.invoice_type,
+       s.currency, s.exchange_rate, s.status,
        s.hacienda_key, s.hacienda_status, s.electronic_invoice,
        s.excluir_reporte, s.station,
        s.user_id, s.user_name, s.created_at
@@ -21,11 +21,20 @@ class CartService:
         self.db = db
 
     def create_sale(self, sale: Sale, items: list[SaleItem],
-                    credit_notes: str | None = None) -> int:
+                    credit_notes: str | None = None,
+                    account_type: str = "credito",
+                    delivery_status: str = "",
+                    due_date: str = "",
+                    prima: float = 0.0,
+                    prima_method: str = "efectivo",
+                    financing_months: int = 0,
+                    financing_installment: float = 0.0) -> int:
         """Registra una venta.
 
         Si `credit_notes` no es None y la venta es a crédito, crea la cuenta
         por cobrar dentro de la misma transacción (venta + cuenta atómicas).
+        Para encargos/apartados (`account_type`) la cuenta queda pendiente de
+        entrega y la `prima` se registra como abono en la misma transacción.
         """
         reference = getattr(sale, "sale_reference", "") or ""
         if reference:
@@ -57,17 +66,18 @@ class CartService:
                 """
                 INSERT INTO sales (invoice_number, client_id, subtotal, discount,
                     tax_amount, total, payment_method, cash_received, change_amount,
-                    payment_details, invoice_type, currency, exchange_rate,
-                    sale_reference,
+                    payment_details, promotions_applied, invoice_type, currency,
+                    exchange_rate, sale_reference,
                     status, hacienda_key,
                     hacienda_status, electronic_invoice, station, user_id,
                     user_name, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     COALESCE(?, datetime('now', 'localtime')))
                 """,
                 (invoice_number, sale.client_id, sale.subtotal, sale.discount,
                  sale.tax_amount, sale.total, sale.payment_method, sale.cash_received,
                  sale.change_amount, sale.payment_details,
+                 getattr(sale, "promotions_applied", ""),
                  getattr(sale, "invoice_type", "general"),
                  getattr(sale, "currency", "CRC"),
                  getattr(sale, "exchange_rate", 0.0),
@@ -97,13 +107,37 @@ class CartService:
                     and (sale.payment_method or "").lower() == "credito"
                     and sale.client_id):
                 total = float(sale.total or 0)
-                connection.execute(
+                if not delivery_status:
+                    delivery_status = ("entregado" if account_type == "credito"
+                                       else "pendiente")
+                prima_amount = round(max(0.0, float(prima or 0.0)), 2)
+                if prima_amount > total:
+                    raise ValueError(
+                        "La prima no puede superar el total de la venta.")
+                balance = round(total - prima_amount, 2)
+                status = "pagada" if balance <= 0 else "pendiente"
+                cursor = connection.execute(
                     "INSERT INTO credit_accounts (sale_id, client_id, invoice_number, "
-                    "total, amount_paid, balance, status, notes) "
-                    "VALUES (?, ?, ?, ?, 0, ?, 'pendiente', ?)",
-                    (sale_id, sale.client_id, invoice_number, total, total,
+                    "total, amount_paid, balance, status, account_type, "
+                    "delivery_status, delivered_at, due_date, financing_months, "
+                    "financing_installment, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)",
+                    (sale_id, sale.client_id, invoice_number, total, prima_amount,
+                     balance, status, account_type, delivery_status,
+                     due_date, int(financing_months or 0),
+                     round(float(financing_installment or 0.0), 2),
                      credit_notes),
                 )
+                if prima_amount > 0:
+                    connection.execute(
+                        "INSERT INTO credit_payments (credit_account_id, amount, "
+                        "payment_method, notes, payment_reference, user_id, user_name) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (cursor.lastrowid, prima_amount, prima_method,
+                         "Prima del encargo",
+                         f"{reference}:prima" if reference else None,
+                         sale.user_id, sale.user_name),
+                    )
         return sale_id
 
     def get_sale(self, sale_id: int) -> Sale | None:

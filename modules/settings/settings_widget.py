@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -14,11 +15,21 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from utils.helpers import NoWheelComboBox
+from utils.helpers import (
+    ajustar_anchos_encabezado,
+    EmptyStateTable,
+    NoWheelComboBox,
+)
+
+from modules.promotions.promotion_dialog import PromotionDialog, describe_promotion
+from modules.promotions.promotion_service import TYPE_LABELS
 
 CONFIG_KEYS = [
     "company_name",
@@ -106,13 +117,26 @@ class SettingsWidget(QWidget):
         subtitle.setObjectName("settingsSubtitle")
         outer.addWidget(subtitle)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 8, 4, 8)
-        layout.setSpacing(16)
-        content.setMaximumWidth(760)
+        tabs = QTabWidget()
+        tabs.setObjectName("settingsTabs")
+
+        def _tab_page() -> tuple[QScrollArea, QVBoxLayout]:
+            page_scroll = QScrollArea()
+            page_scroll.setWidgetResizable(True)
+            page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(4, 8, 4, 8)
+            page_layout.setSpacing(16)
+            page.setMaximumWidth(980)
+            page_scroll.setWidget(page)
+            return page_scroll, page_layout
+
+        company_page, company_page_layout = _tab_page()
+        promo_page, promo_page_layout = _tab_page()
+        hacienda_page, hacienda_page_layout = _tab_page()
+        printer_page, printer_page_layout = _tab_page()
+        system_page, system_page_layout = _tab_page()
 
         # ---------- Tarjeta 1: Empresa ----------
         company_group = QGroupBox("Empresa")
@@ -137,9 +161,61 @@ class SettingsWidget(QWidget):
         company_form.addRow(self._label("Teléfono:"), self.phone_input)
         company_form.addRow(self._label("Dirección:"), self.address_input)
         company_form.addRow(self._label("Actividad económica:"), self.activity_input)
-        layout.addWidget(company_group)
+        company_page_layout.addWidget(company_group)
 
-        # ---------- Tarjeta 2: Hacienda ----------
+        # ---------- Tarjeta 2: Promociones y descuentos ----------
+        promo_group = QGroupBox("Promociones y descuentos")
+        promo_group.setObjectName("settingsGroup")
+        promo_layout = QVBoxLayout(promo_group)
+        promo_layout.setContentsMargins(18, 14, 18, 14)
+        promo_layout.setSpacing(10)
+
+        promo_buttons = QHBoxLayout()
+        new_promo = QPushButton("Nueva promoción")
+        new_promo.setObjectName("primaryButton")
+        new_promo.clicked.connect(self._new_promotion)
+        edit_promo = QPushButton("Editar")
+        edit_promo.clicked.connect(self._edit_promotion)
+        toggle_promo = QPushButton("Activar/Desactivar")
+        toggle_promo.setObjectName("secondaryButton")
+        toggle_promo.clicked.connect(self._toggle_promotion)
+        delete_promo = QPushButton("Eliminar")
+        delete_promo.setObjectName("dangerButton")
+        delete_promo.clicked.connect(self._delete_promotion)
+        promo_buttons.addWidget(new_promo)
+        promo_buttons.addWidget(edit_promo)
+        promo_buttons.addWidget(toggle_promo)
+        promo_buttons.addWidget(delete_promo)
+        promo_buttons.addStretch(1)
+        promo_layout.addLayout(promo_buttons)
+
+        self.promotions_table = EmptyStateTable(
+            "Sin promociones configuradas.", 0, 4)
+        self.promotions_table.setHorizontalHeaderLabels(
+            ["Nombre", "Tipo", "Detalle", "Estado"])
+        self.promotions_table.horizontalHeader().setObjectName("tableHeader")
+        self.promotions_table.verticalHeader().setVisible(False)
+        self.promotions_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows)
+        self.promotions_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers)
+        self.promotions_table.setAlternatingRowColors(True)
+        self.promotions_table.setMaximumHeight(220)
+        self.promotions_table.doubleClicked.connect(self._edit_promotion)
+        ajustar_anchos_encabezado(
+            self.promotions_table, [210, 170, 420, 110])
+        promo_layout.addWidget(self.promotions_table)
+
+        promo_hint = QLabel(
+            "Conjuntos (2 productos), volumen por cantidad, descuento por método "
+            "de pago y meses sin intereses para ventas a crédito. Se aplican "
+            "solos en el carrito.")
+        promo_hint.setObjectName("settingsHint")
+        promo_hint.setWordWrap(True)
+        promo_layout.addWidget(promo_hint)
+        promo_page_layout.addWidget(promo_group)
+
+        # ---------- Tarjeta 3: Hacienda ----------
         hacienda_group = QGroupBox("Hacienda · Facturación electrónica")
         hacienda_group.setObjectName("settingsGroup")
         hacienda_form = QFormLayout(hacienda_group)
@@ -189,7 +265,7 @@ class SettingsWidget(QWidget):
         numbering_row.addLayout(self._mini_field("Terminal", self.terminal_input), 1)
         numbering_row.addLayout(self._mini_field("Consecutivo FE", self.consecutive_input), 1)
         hacienda_form.addRow(self._label("Numeración:"), numbering_row)
-        layout.addWidget(hacienda_group)
+        hacienda_page_layout.addWidget(hacienda_group)
 
         # ---------- Tarjeta 3: Moneda ----------
         currency_group = QGroupBox("Moneda y Tipo de Cambio")
@@ -211,7 +287,7 @@ class SettingsWidget(QWidget):
         currency_form.addRow(self._label("Tipo de cambio (₡/$):"), self.exchange_rate_input)
         currency_form.addRow(self._label("Última actualización:"), self.exchange_rate_date_label)
         currency_form.addRow("", update_rate_button)
-        layout.addWidget(currency_group)
+        company_page_layout.addWidget(currency_group)
 
         # ---------- Tarjeta 4: Impresora ----------
         printer_group = QGroupBox("Impresora de tickets")
@@ -234,7 +310,7 @@ class SettingsWidget(QWidget):
         printer_form.addRow(self._label("Impresora de tickets:"), self.printer_combo)
         printer_form.addRow("", test_printer_button)
         printer_form.addRow("", printer_hint)
-        layout.addWidget(printer_group)
+        printer_page_layout.addWidget(printer_group)
 
         # ---------- Tarjeta 5: Documentos ----------
         docs_group = QGroupBox("Carpeta de documentos (XML + PDF)")
@@ -265,7 +341,7 @@ class SettingsWidget(QWidget):
         docs_form.addRow("", open_docs_button)
         docs_form.addRow("", test_docs_button)
         docs_form.addRow("", docs_hint)
-        layout.addWidget(docs_group)
+        printer_page_layout.addWidget(docs_group)
 
         # ---------- Tarjeta 6: Actualizaciones ----------
         update_group = QGroupBox("Actualizaciones (red local)")
@@ -288,7 +364,26 @@ class SettingsWidget(QWidget):
         update_form.addRow(self._label("Versión instalada:"), self.version_label)
         update_form.addRow("", check_update_button)
         update_form.addRow("", update_hint)
-        layout.addWidget(update_group)
+        system_page_layout.addWidget(update_group)
+
+        # ---------- Tarjeta 7: Diagnóstico ----------
+        diag_group = QGroupBox("Diagnóstico de la instalación")
+        diag_group.setObjectName("settingsGroup")
+        diag_form = QFormLayout(diag_group)
+        diag_form.setContentsMargins(18, 14, 18, 14)
+        diag_form.setSpacing(12)
+
+        diag_button = QPushButton("Probar instalación")
+        diag_button.setObjectName("primaryButton")
+        diag_button.clicked.connect(self._run_diagnostico)
+        diag_hint = QLabel(
+            "Revisa Windows, permisos, disco, puerto del servidor, impresoras y "
+            "la base de datos. Copie el reporte si algo falla.")
+        diag_hint.setObjectName("settingsHint")
+        diag_hint.setWordWrap(True)
+        diag_form.addRow("", diag_button)
+        diag_form.addRow("", diag_hint)
+        system_page_layout.addWidget(diag_group)
 
         # ---------- Acciones ----------
         buttons = QHBoxLayout()
@@ -307,10 +402,14 @@ class SettingsWidget(QWidget):
         buttons.addWidget(test_button)
         buttons.addWidget(reset_button)
         buttons.addStretch(1)
-        layout.addLayout(buttons)
 
-        scroll.setWidget(content)
-        outer.addWidget(scroll, 1)
+        tabs.addTab(company_page, "Empresa")
+        tabs.addTab(promo_page, "Promociones")
+        tabs.addTab(hacienda_page, "Hacienda")
+        tabs.addTab(printer_page, "Impresora y docs")
+        tabs.addTab(system_page, "Sistema")
+        outer.addWidget(tabs, 1)
+        outer.addLayout(buttons)
 
     def _field_row(self, field: QLineEdit, toggle: QPushButton) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -373,6 +472,7 @@ class SettingsWidget(QWidget):
         self._load_version()
 
     def _load_config(self) -> None:
+        self._refresh_promotions()
         db = self.services.get("db")
         if db is not None:
             try:
@@ -449,6 +549,107 @@ class SettingsWidget(QWidget):
             QMessageBox.information(self, "Prueba de conexión", "Conexión con Hacienda establecida correctamente.")
         else:
             QMessageBox.warning(self, "Prueba de conexión", "No se pudo conectar con los servicios de Hacienda.")
+
+    def _run_diagnostico(self) -> None:
+        """Ejecuta el diagnóstico de instalación y muestra el resultado."""
+        try:
+            from utils.diagnostico import recolectar
+            from ui.error_dialog import mostrar_diagnostico
+            checks = recolectar()
+        except Exception as exc:
+            QMessageBox.warning(self, "Diagnóstico",
+                                f"No se pudo ejecutar el diagnóstico:\n{exc}")
+            return
+        mostrar_diagnostico(self, checks)
+
+    # ---------- promociones ----------
+
+    def _promotions_service(self):
+        return self.services.get("promotions")
+
+    def _refresh_promotions(self) -> None:
+        service = self._promotions_service()
+        table = self.promotions_table
+        if service is None:
+            table.setRowCount(0)
+            return
+        try:
+            promotions = service.get_all()
+            products = {p.id: p for p in self.services["product"].get_all()}
+        except Exception:
+            promotions, products = [], {}
+        table.setRowCount(len(promotions))
+        for row, promo in enumerate(promotions):
+            values = [
+                promo.name,
+                TYPE_LABELS.get(promo.type, promo.type),
+                describe_promotion(promo, products),
+                "Activa" if promo.active else "Inactiva",
+            ]
+            for col, val in enumerate(values):
+                item = QTableWidgetItem(str(val))
+                if col == 3:
+                    item.setForeground(Qt.GlobalColor.green if promo.active
+                                       else Qt.GlobalColor.gray)
+                table.setItem(row, col, item)
+            table.item(row, 0).setData(Qt.ItemDataRole.UserRole, promo)
+        table.resizeRowsToContents()
+
+    def _selected_promotion(self):
+        row = self.promotions_table.currentRow()
+        if row < 0:
+            return None
+        item = self.promotions_table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _new_promotion(self) -> None:
+        service = self._promotions_service()
+        if service is None:
+            return
+        products = self.services["product"].get_all()
+        dialog = PromotionDialog(service, products=products, parent=self)
+        if dialog.exec() and dialog.saved:
+            self._refresh_promotions()
+
+    def _edit_promotion(self) -> None:
+        promo = self._selected_promotion()
+        service = self._promotions_service()
+        if promo is None or service is None:
+            QMessageBox.information(self, "Promociones",
+                                    "Seleccione una promoción.")
+            return
+        products = self.services["product"].get_all()
+        dialog = PromotionDialog(service, promotion=promo, products=products,
+                                 parent=self)
+        if dialog.exec() and dialog.saved:
+            self._refresh_promotions()
+
+    def _toggle_promotion(self) -> None:
+        promo = self._selected_promotion()
+        service = self._promotions_service()
+        if promo is None or service is None:
+            QMessageBox.information(self, "Promociones",
+                                    "Seleccione una promoción.")
+            return
+        service.set_active(promo.id, not bool(promo.active))
+        self._refresh_promotions()
+
+    def _delete_promotion(self) -> None:
+        promo = self._selected_promotion()
+        service = self._promotions_service()
+        if promo is None or service is None:
+            QMessageBox.information(self, "Promociones",
+                                    "Seleccione una promoción.")
+            return
+        answer = QMessageBox.question(
+            self, "Eliminar promoción",
+            f"¿Eliminar la promoción '{promo.name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        service.delete(promo.id)
+        self._refresh_promotions()
 
     def _load_exchange_rate(self) -> None:
         """Carga el tipo de cambio actual de la base de datos."""

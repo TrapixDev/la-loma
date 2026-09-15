@@ -17,16 +17,27 @@ class CreditService:
     # ---------- cuentas ----------
 
     def create_account(self, sale_id: int, client_id: int, invoice_number: str,
-                       total: float, notes: str = "") -> int:
+                       total: float, notes: str = "",
+                       account_type: str = "credito",
+                       delivery_status: str = "entregado",
+                       due_date: str = "",
+                       financing_months: int = 0,
+                       financing_installment: float = 0.0) -> int:
         return self.db.execute_insert(
             "INSERT INTO credit_accounts "
-            "(sale_id, client_id, invoice_number, total, amount_paid, balance, notes) "
-            "VALUES (?, ?, ?, ?, 0, ?, ?)",
-            (sale_id, client_id, invoice_number, total, total, notes),
+            "(sale_id, client_id, invoice_number, total, amount_paid, balance, "
+            "account_type, delivery_status, due_date, financing_months, "
+            "financing_installment, notes) "
+            "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)",
+            (sale_id, client_id, invoice_number, total, total,
+             account_type, delivery_status, due_date,
+             int(financing_months or 0),
+             round(float(financing_installment or 0.0), 2), notes),
         )
 
     def get_all(self, status_filter: str = "",
-                client_search: str = "") -> list[CreditAccount]:
+                client_search: str = "",
+                type_filter: str = "") -> list[CreditAccount]:
         sql = (
             "SELECT ca.*, c.name AS client_name, c.id_number AS client_id_number, "
             "c.phone AS client_phone "
@@ -38,6 +49,10 @@ class CreditService:
         if status_filter:
             sql += " AND ca.status = ?"
             params.append(status_filter)
+        if type_filter == "credito":
+            sql += " AND ca.account_type = 'credito'"
+        elif type_filter == "encargo":
+            sql += " AND ca.account_type <> 'credito'"
         if client_search:
             sql += " AND (c.name LIKE ? OR c.id_number LIKE ?)"
             pattern = f"%{client_search}%"
@@ -166,6 +181,17 @@ class CreditService:
             (paid, balance, status, account_id),
         )
 
+    # ---------- entrega (encargos/apartados) ----------
+
+    def mark_delivered(self, account_id: int) -> bool:
+        """Marca un encargo/apartado como entregado (con fecha de hoy)."""
+        return self.db.execute_update(
+            "UPDATE credit_accounts SET delivery_status = 'entregado', "
+            "delivered_at = datetime('now', 'localtime'), "
+            "updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (account_id,),
+        )
+
     # ---------- resumen ----------
 
     def get_summary(self) -> dict:
@@ -176,7 +202,13 @@ class CreditService:
             "COALESCE(SUM(amount_paid), 0) AS total_pagado, "
             "COUNT(*) AS total_cuentas, "
             "COALESCE(SUM(CASE WHEN status = 'pendiente' THEN 1 ELSE 0 END), 0) "
-            "AS cuentas_pendientes "
+            "AS cuentas_pendientes, "
+            "COALESCE(SUM(CASE WHEN account_type <> 'credito' "
+            "AND delivery_status = 'pendiente' THEN 1 ELSE 0 END), 0) "
+            "AS encargos_pendientes, "
+            "COALESCE(SUM(CASE WHEN account_type <> 'credito' "
+            "AND delivery_status = 'pendiente' THEN balance ELSE 0 END), 0) "
+            "AS total_encargos "
             "FROM credit_accounts"
         )
         r = rows[0] if rows else {}
@@ -185,6 +217,8 @@ class CreditService:
             "total_pagado": float(r.get("total_pagado", 0) or 0),
             "total_cuentas": int(r.get("total_cuentas", 0) or 0),
             "cuentas_pendientes": int(r.get("cuentas_pendientes", 0) or 0),
+            "encargos_pendientes": int(r.get("encargos_pendientes", 0) or 0),
+            "total_encargos": float(r.get("total_encargos", 0) or 0),
         }
 
     # ---------- comprobantes ----------

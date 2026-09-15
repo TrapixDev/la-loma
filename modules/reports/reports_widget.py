@@ -28,7 +28,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from utils.helpers import format_currency, NoWheelSpinBox, NoWheelComboBox
+from utils.helpers import (
+    ajustar_anchos_encabezado,
+    format_currency,
+    EmptyStateTable,
+    NoWheelSpinBox,
+    NoWheelComboBox,
+)
 from modules.documentos import reimprimir_factura, generar_nota_credito
 
 MONTH_NAMES = [
@@ -333,7 +339,7 @@ class MovimientosDiaDialog(QDialog):
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
 
-        table = QTableWidget(0, 4)
+        table = EmptyStateTable("Sin movimientos para este día.", 0, 4)
         table.setHorizontalHeaderLabels(["Tipo", "Detalle", "Método", "Monto"])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -364,6 +370,7 @@ class MovimientosDiaDialog(QDialog):
         table.setColumnWidth(0, 90)
         table.setColumnWidth(1, 240)
         table.setColumnWidth(2, 90)
+        ajustar_anchos_encabezado(table, {0: 90, 1: 240, 2: 90})
         layout.addWidget(table, 1)
 
         scroll.setWidget(container)
@@ -397,8 +404,11 @@ class ReportsWidget(QWidget):
 
         toolbar = QWidget()
         toolbar.setObjectName("reportToolbar")
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(10, 8, 10, 8)
+        toolbar_root = QVBoxLayout(toolbar)
+        toolbar_root.setContentsMargins(10, 8, 10, 8)
+        toolbar_root.setSpacing(6)
+
+        toolbar_layout = QHBoxLayout()
         toolbar_layout.setSpacing(8)
 
         self.month_button = QPushButton("Mensual")
@@ -439,29 +449,35 @@ class ReportsWidget(QWidget):
         export_button.setObjectName("primaryButton")
         export_button.clicked.connect(self._export_csv)
         toolbar_layout.addWidget(export_button)
+        toolbar_root.addLayout(toolbar_layout)
+
+        actions_layout = QHBoxLayout()
+        actions_layout.setSpacing(8)
 
         self.reprint_button = QPushButton("Reimprimir")
         self.reprint_button.setObjectName("secondaryButton")
         self.reprint_button.clicked.connect(self._reprint_sale)
         self.reprint_button.setEnabled(False)
-        toolbar_layout.addWidget(self.reprint_button)
+        actions_layout.addWidget(self.reprint_button)
 
         self.anular_button = QPushButton("Anular")
         self.anular_button.setObjectName("secondaryButton")
         self.anular_button.clicked.connect(self._anular_sale)
         self.anular_button.setEnabled(False)
-        toolbar_layout.addWidget(self.anular_button)
+        actions_layout.addWidget(self.anular_button)
 
         self.nota_credito_button = QPushButton("Nota de crédito")
         self.nota_credito_button.setObjectName("secondaryButton")
         self.nota_credito_button.clicked.connect(self._nota_credito)
         self.nota_credito_button.setEnabled(False)
-        toolbar_layout.addWidget(self.nota_credito_button)
+        actions_layout.addWidget(self.nota_credito_button)
 
         expense_button = QPushButton("Registrar gasto")
         expense_button.setObjectName("expenseButton")
         expense_button.clicked.connect(self._open_expense_dialog)
-        toolbar_layout.addWidget(expense_button)
+        actions_layout.addWidget(expense_button)
+        actions_layout.addStretch(1)
+        toolbar_root.addLayout(actions_layout)
 
         layout.addWidget(toolbar)
 
@@ -493,9 +509,11 @@ class ReportsWidget(QWidget):
 
         self.stack = QStackedWidget()
         self.daily_table = self._make_table(
-            ["Día", "Ventas", "Ingresos", "Egresos", "Ganancia"])
+            ["Día", "Ventas", "Ingresos", "Egresos", "Ganancia"],
+            "Sin ventas en el período.")
         self.sales_table = self._make_table(
-            ["N°", "Fecha", "Cliente", "Total", "Pago", "Hacienda", "Estado"])
+            ["N°", "Fecha", "Cliente", "Total", "Pago", "Hacienda", "Estado"],
+            "Sin ventas registradas en el período.")
         self.sales_table.itemSelectionChanged.connect(self._update_action_buttons)
         self.daily_table.doubleClicked.connect(self._open_day_movements)
         self.month_page = QWidget()
@@ -506,8 +524,10 @@ class ReportsWidget(QWidget):
         self.stack.addWidget(self.month_page)
 
         self.monthly_table = self._make_table(
-            ["Mes", "Ventas", "Ingresos", "Egresos", "Ganancia"])
-        self.category_table = self._make_table(["Categoría", "N°", "Total"])
+            ["Mes", "Ventas", "Ingresos", "Egresos", "Ganancia"],
+            "Sin datos mensuales.")
+        self.category_table = self._make_table(
+            ["Categoría", "N°", "Total"], "Sin gastos por categoría.")
         self.year_page = QWidget()
         year_layout = QVBoxLayout(self.year_page)
         year_layout.setContentsMargins(0, 0, 0, 0)
@@ -516,8 +536,9 @@ class ReportsWidget(QWidget):
         self.stack.addWidget(self.year_page)
         layout.addWidget(self.stack, 1)
 
-    def _make_table(self, headers: list[str]) -> QTableWidget:
-        table = QTableWidget(0, len(headers))
+    def _make_table(self, headers: list[str],
+                    empty_message: str = "Sin datos para el período.") -> QTableWidget:
+        table = EmptyStateTable(empty_message, 0, len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.horizontalHeader().setObjectName("tableHeader")
         table.verticalHeader().setVisible(False)
@@ -581,6 +602,7 @@ class ReportsWidget(QWidget):
         if widths:
             for column, width in enumerate(widths):
                 table.setColumnWidth(column, width)
+            ajustar_anchos_encabezado(table, widths)
 
     def _update_tables(self) -> None:
         annual = self.year_button.isChecked()
@@ -595,7 +617,7 @@ class ReportsWidget(QWidget):
                 ]
                 for row in self._data.get("breakdown", [])
             ]
-            self._fill_table(self.monthly_table, rows, [120, 70, 130, 130, 130])
+            self._fill_table(self.monthly_table, rows, [120, 85, 130, 130, 130])
             category_rows = [
                 [row["category"], str(row["count"]), format_currency(row["total"])]
                 for row in self._data.get("categories", [])
@@ -612,7 +634,7 @@ class ReportsWidget(QWidget):
                 ]
                 for row in self._data.get("breakdown", [])
             ]
-            self._fill_table(self.daily_table, rows, [100, 60, 130, 130, 130])
+            self._fill_table(self.daily_table, rows, [100, 85, 130, 130, 130])
             sales_rows = []
             for sale in self._data.get("sales", []):
                 number = sale.get("invoice_number") or str(sale.get("id", ""))
@@ -626,7 +648,7 @@ class ReportsWidget(QWidget):
                     sale.get("hacienda_status") or "",
                     "ANULADA" if anulada else "",
                 ])
-            self._fill_table(self.sales_table, sales_rows, [90, 130, 200, 110, 100, 100, 80])
+            self._fill_table(self.sales_table, sales_rows, [95, 130, 200, 110, 100, 105, 90])
             self._mark_anuladas()
             self._update_action_buttons()
 

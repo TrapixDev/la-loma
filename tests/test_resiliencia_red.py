@@ -89,3 +89,48 @@ def test_resolve_port():
     assert _resolve_port("8001", "http://192.168.1.10:9000", 8000) == 8001
     assert _resolve_port("no-numero", "", 8000) == 8000
     print("[OK] resolución de puerto: clave > server_url > 8000")
+
+
+def test_resolve_port_env():
+    from config import _resolve_port
+    os.environ["POS_SERVER_PORT"] = "8123"
+    try:
+        assert _resolve_port("", "", 8000) == 8123
+        assert _resolve_port("8001", "", 8000) == 8123
+    finally:
+        os.environ.pop("POS_SERVER_PORT", None)
+    assert _resolve_port("8001", "", 8000) == 8001
+    print("[OK] POS_SERVER_PORT tiene prioridad")
+
+
+def test_find_free_port_salta_ocupados():
+    from main import _find_free_port, _tcp_open
+    server, port, stop = _start_closing_server()
+    try:
+        assert _tcp_open("127.0.0.1", port) is True
+        free = _find_free_port(port)
+        assert free is not None and free != port
+        assert not _tcp_open("127.0.0.1", free)
+    finally:
+        stop.set()
+        server.close()
+    print("[OK] _find_free_port salta el puerto ocupado")
+
+
+def test_choose_local_port():
+    from main import _choose_local_port
+    server, port, stop = _start_closing_server()
+    try:
+        chosen = _choose_local_port(f"http://127.0.0.1:{port}", pinned=False)
+        assert chosen is not None and chosen != port, chosen
+        assert _choose_local_port(f"http://127.0.0.1:{port}", pinned=True) is None
+    finally:
+        stop.set()
+        server.close()
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    free_port = probe.getsockname()[1]
+    probe.close()
+    assert _choose_local_port(f"http://127.0.0.1:{free_port}", pinned=False) is None
+    print("[OK] auto-puerto: mueve si está ocupado y no está fijado")

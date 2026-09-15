@@ -79,6 +79,7 @@ class Sale:
     cash_received: float = 0.0
     change_amount: float = 0.0
     payment_details: str = ""
+    promotions_applied: str = ""
     invoice_type: str = "general"
     sale_reference: str = ""
     currency: str = "CRC"
@@ -119,6 +120,12 @@ class CreditAccount:
     amount_paid: float = 0.0
     balance: float = 0.0
     status: str = "pendiente"
+    account_type: str = "credito"
+    delivery_status: str = "entregado"
+    delivered_at: str = ""
+    due_date: str = ""
+    financing_months: int = 0
+    financing_installment: float = 0.0
     notes: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -151,3 +158,15 @@ class CreditPaymentImage:
     description: str = ""
     is_cover: bool = False
     created_at: str = ""
+
+
+@dataclass
+class Promotion:
+    id: int = 0
+    name: str = ""
+    type: str = ""
+    params: str = "{}"
+    active: bool = True
+    priority: int = 0
+    created_at: str = ""
+    updated_at: str = ""

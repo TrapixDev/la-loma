@@ -52,3 +52,60 @@ class NoWheelComboBox(QComboBox):
 
     def wheelEvent(self, event):
         event.ignore()
+
+
+def ajustar_anchos_encabezado(table, anchos) -> None:
+    """Garantiza que cada columna quepa su título según la fuente real.
+
+    `anchos` puede ser una lista (columna 0, 1, 2...) o un dict {columna: ancho}.
+    Usa las métricas del encabezado (ya con el estilo aplicado) y sube el ancho
+    de la columna si el título se cortaría. Mantiene los anchos base cuando
+    alcanzan, para no desperdiciar espacio en pantallas de 768p.
+    """
+    header = table.horizontalHeader()
+    header.ensurePolished()
+    metrics = header.fontMetrics()
+    pares = anchos.items() if isinstance(anchos, dict) else enumerate(anchos)
+    for col, ancho in pares:
+        if col >= table.columnCount():
+            break
+        item = table.horizontalHeaderItem(col)
+        texto = item.text() if item is not None else ""
+        necesario = metrics.horizontalAdvance(texto) + 36
+        table.setColumnWidth(col, max(ancho, necesario))
+
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QLabel, QTableWidget
+
+
+class EmptyStateTable(QTableWidget):
+    """QTableWidget que muestra un mensaje centrado cuando no tiene filas."""
+
+    def __init__(self, message: str, rows: int = 0, columns: int = 1,
+                 parent=None):
+        super().__init__(rows, columns, parent)
+        self._empty_label = QLabel(message, self.viewport())
+        self._empty_label.setObjectName("emptyState")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setWordWrap(True)
+        self._empty_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._update_empty_state()
+
+    def set_empty_message(self, message: str) -> None:
+        self._empty_label.setText(message)
+
+    def setRowCount(self, rows: int) -> None:  # noqa: N802 - API de Qt
+        super().setRowCount(rows)
+        self._update_empty_state()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - API de Qt
+        super().resizeEvent(event)
+        self._update_empty_state()
+
+    def _update_empty_state(self) -> None:
+        visible = self.rowCount() == 0
+        self._empty_label.setVisible(visible)
+        if visible:
+            self._empty_label.setGeometry(self.viewport().rect())

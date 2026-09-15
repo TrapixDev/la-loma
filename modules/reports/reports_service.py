@@ -54,6 +54,33 @@ def _exclusion_clause() -> str:
     return "AND (s.status <> 'anulada' OR COALESCE(s.excluir_reporte, 0) = 0)"
 
 
+# Costo de fabricación: los encargos/apartados lo reconocen en la fecha de
+# entrega; mientras están pendientes no cuentan en los reportes.
+_COST_JOIN = (
+    "LEFT JOIN credit_accounts ca ON ca.sale_id = s.id "
+    "AND ca.account_type <> 'credito'"
+)
+_COST_DATE = (
+    "COALESCE(CASE WHEN ca.id IS NOT NULL AND ca.delivery_status = 'entregado' "
+    "THEN NULLIF(ca.delivered_at, '') ELSE s.created_at END, s.created_at)"
+)
+_COST_SCOPE = "AND (ca.id IS NULL OR ca.delivery_status = 'entregado')"
+
+
+def _cost_filters(start: str = "", end: str = "") -> tuple[str, list[object]]:
+    """Cláusula de costo con fecha efectiva (entrega para encargos)."""
+    clause = "WHERE 1 = 1"
+    params: list[object] = []
+    if start:
+        clause += f" AND {_COST_DATE} >= ?"
+        params.append(start)
+    if end:
+        clause += f" AND {_COST_DATE} <= ?"
+        params.append(_end_of_day(end))
+    clause += " " + _exclusion_clause() + " " + _COST_SCOPE
+    return clause, params
+
+
 CREDIT_METHOD = "credito"
 
 # Abonos pertenecientes a cuentas cuya venta fue anulada y excluida del
@@ -147,8 +174,9 @@ class ReportsService:
         """Ingresos, número de ventas, costo y ganancia bruta del período.
 
         Ingresos en base a caja: las ventas a crédito no suman al momento de la
-        venta; suman conforme se reciben los abonos. El costo de fabricación sí
-        se cuenta en la fecha de la venta.
+        venta; suman conforme se reciben los abonos. El costo de fabricación se
+        cuenta en la fecha de la venta, salvo encargos/apartados, que lo
+        reconocen en la fecha de entrega (y no cuentan si están pendientes).
         """
         clause, params = _date_filters(start, end)
         clause += " " + _exclusion_clause()
@@ -161,17 +189,25 @@ class ReportsService:
                     ELSE s.total END), 0)
                  FROM sales s {clause}) AS ingresos_ventas,
                 (SELECT COALESCE(SUM(s.tax_amount), 0)
-                 FROM sales s {clause}) AS tax_amount,
-                (SELECT COALESCE(SUM(i.quantity * i.unit_cost), 0)
-                 FROM sale_items i JOIN sales s ON i.sale_id = s.id {clause}) AS cost
+                 FROM sales s {clause}) AS tax_amount
             """,
-            tuple(params * 4),
+            tuple(params * 3),
+        )
+        cost_clause, cost_params = _cost_filters(start, end)
+        cost_rows = self.db.execute_query(
+            f"""
+            SELECT COALESCE(SUM(i.quantity * i.unit_cost), 0) AS cost
+            FROM sale_items i JOIN sales s ON i.sale_id = s.id
+            {_COST_JOIN}
+            {cost_clause}
+            """,
+            tuple(cost_params),
         )
         row = rows[0]
         notas = _credit_notes_total(self.db, start, end)
         ingresos = (float(row["ingresos_ventas"] or 0)
                     + _credit_payments_total(self.db, start, end) - notas)
-        cost = float(row["cost"] or 0)
+        cost = float((cost_rows[0]["cost"] if cost_rows else 0) or 0)
         return {
             "sale_count": int(row["sale_count"] or 0),
             "ingresos": round(ingresos, 2),
@@ -197,14 +233,17 @@ class ReportsService:
             """,
             tuple(params),
         )
+        cost_clause, cost_params = _cost_filters(start, end)
         cost_rows = self.db.execute_query(
             f"""
-            SELECT substr(s.created_at, 1, 10) AS day,
+            SELECT substr({_COST_DATE}, 1, 10) AS day,
                    COALESCE(SUM(i.quantity * i.unit_cost), 0) AS cost
-            FROM sale_items i JOIN sales s ON i.sale_id = s.id {clause}
+            FROM sale_items i JOIN sales s ON s.id = i.sale_id
+            {_COST_JOIN}
+            {cost_clause}
             GROUP BY day
             """,
-            tuple(params),
+            tuple(cost_params),
         )
         cp_clause, cp_params = _credit_payment_filters(start, end)
         credit_rows = self.db.execute_query(
@@ -279,10 +318,11 @@ class ReportsService:
         )
         cost_rows = self.db.execute_query(
             f"""
-            SELECT CAST(substr(s.created_at, 6, 2) AS INTEGER) AS month,
+            SELECT CAST(substr({_COST_DATE}, 6, 2) AS INTEGER) AS month,
                    COALESCE(SUM(i.quantity * i.unit_cost), 0) AS cost
-            FROM sale_items i JOIN sales s ON i.sale_id = s.id
-            WHERE substr(s.created_at, 1, 4) = ? {excl}
+            FROM sale_items i JOIN sales s ON s.id = i.sale_id
+            {_COST_JOIN}
+            WHERE substr({_COST_DATE}, 1, 4) = ? {excl} {_COST_SCOPE}
             GROUP BY month
             """,
             (str(year),),

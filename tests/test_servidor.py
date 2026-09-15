@@ -92,6 +92,8 @@ def test_validate_sql_politica_tablas():
         "ON CONFLICT(name) DO UPDATE SET value = value + 1",
         "UPDATE sales SET status = 'anulada' WHERE id = 1",
         "UPDATE products SET active = 0 WHERE id = 1",
+        "INSERT INTO promotions (name, type) VALUES ('x', 'payment')",
+        "DELETE FROM promotions WHERE id = 1",
         "DELETE FROM product_images WHERE id = 1",
         "DELETE FROM expenses WHERE id = 1",
     )

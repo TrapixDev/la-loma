@@ -52,6 +52,47 @@ def _redirigir_salida_sin_consola() -> None:
     except Exception:
         pass
 
+
+def _instalar_hooks() -> None:
+    """Envía cualquier excepción no controlada al archivo de log."""
+    import threading
+
+    from utils.diagnostico import escribir_log
+
+    def _hook(exc_type, exc_value, exc_tb):
+        import traceback
+        detalle = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        escribir_log("Excepción no controlada:\n" + detalle)
+
+    sys.excepthook = _hook
+    threading.excepthook = lambda args: _hook(
+        args.exc_type, args.exc_value, args.exc_traceback)
+
+
+def _diagnostico_primera_vez() -> None:
+    """Avisa solo si hay problemas de instalación (una vez por equipo)."""
+    from utils.diagnostico import (
+        escribir_log,
+        hay_problemas,
+        log_dir,
+        recolectar,
+        texto_reporte,
+    )
+    try:
+        marca = log_dir() / ".diagnostico_revisado"
+        if marca.is_file():
+            return
+        checks = recolectar()
+        escribir_log(texto_reporte(checks))
+        if hay_problemas(checks):
+            from ui.error_dialog import mostrar_diagnostico
+            mostrar_diagnostico(None, checks)
+        marca.parent.mkdir(parents=True, exist_ok=True)
+        marca.write_text("ok", encoding="utf-8")
+    except Exception:
+        pass
+
+
 try:
     from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 except ImportError as exc:
@@ -69,6 +110,7 @@ from modules.expenses.expense_service import ExpenseService
 from modules.hacienda.hacienda_client import HaciendaClient
 from modules.pos.cart_service import CartService
 from modules.products.product_service import ProductService
+from modules.promotions.promotion_service import PromotionService
 from modules.reports.reports_service import ReportsService
 from network.image_store import ImageStore
 from network.remote_db import RemoteDatabase, ServerError
@@ -79,6 +121,32 @@ from ui.main_window import MainWindow
 from ui.styles import QSS_MAIN
 
 
+class SafeApplication(QApplication):
+    """QApplication que captura excepciones de la interfaz en vez de abortar."""
+
+    _error_mostrado = False
+
+    def notify(self, receiver, event):
+        try:
+            return super().notify(receiver, event)
+        except Exception:
+            from utils.diagnostico import registrar_traceback
+            detalle = registrar_traceback("Error en la interfaz (slot/evento)")
+            if not SafeApplication._error_mostrado:
+                SafeApplication._error_mostrado = True
+                try:
+                    from ui.error_dialog import mostrar_error
+                    mostrar_error(
+                        None, "Error inesperado",
+                        "Ocurrió un error en la interfaz, pero el POS sigue "
+                        "abierto.\nPuede continuar trabajando; si se repite, "
+                        "copie el diagnóstico y envíelo.",
+                        detalle)
+                except Exception:
+                    pass
+            return False
+
+
 def build_services(db) -> dict:
     return {
         "db": db,
@@ -87,6 +155,7 @@ def build_services(db) -> dict:
         "client": ClientService(db),
         "cart": CartService(db),
         "credit": CreditService(db),
+        "promotions": PromotionService(db),
         "expenses": ExpenseService(db),
         "reports": ReportsService(db),
         "hacienda": HaciendaClient(),
@@ -94,20 +163,26 @@ def build_services(db) -> dict:
     }
 
 
-def _is_local_server() -> bool:
-    """True si SERVER_URL apunta a esta misma PC."""
+def _is_local_server_url(url: str) -> bool:
+    """True si la URL apunta a esta misma PC."""
     try:
-        host = (urlparse(Config.SERVER_URL).hostname or "").lower()
+        host = (urlparse(url).hostname or "").lower()
     except Exception:
         host = ""
     return host in ("", "127.0.0.1", "localhost", "::1")
 
 
-def _port_busy() -> bool:
+def _is_local_server() -> bool:
+    """True si SERVER_URL apunta a esta misma PC."""
+    return _is_local_server_url(Config.SERVER_URL)
+
+
+def _port_busy(port: int | None = None) -> bool:
     """True si otro programa ocupa el puerto del servidor en 127.0.0.1."""
+    port = port or Config.SERVER_PORT
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        probe.bind(("127.0.0.1", Config.SERVER_PORT))
+        probe.bind(("127.0.0.1", port))
         return False
     except OSError:
         return True
@@ -115,11 +190,56 @@ def _port_busy() -> bool:
         probe.close()
 
 
-def _start_server_process() -> bool:
+def _tcp_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    """True si hay algo escuchando en host:port (aunque no sea el POS)."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _find_free_port(start: int, attempts: int = 20) -> int | None:
+    """Primer puerto libre desde `start` (probando en 127.0.0.1)."""
+    for port in range(start, min(start + attempts, 65536)):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", port))
+            return port
+        except OSError:
+            continue
+        finally:
+            probe.close()
+    return None
+
+
+def _choose_local_port(url: str, pinned: bool) -> int | None:
+    """Puerto alterno si el puerto local está ocupado por otro programa.
+
+    Solo aplica a URLs locales y cuando el usuario no fijó puerto/URL en
+    config.ini. Devuelve None cuando no hace falta mover el puerto.
+    """
+    if pinned or not _is_local_server_url(url):
+        return None
+    try:
+        parsed = urlparse(url)
+        port = parsed.port or 8000
+        host = parsed.hostname or "127.0.0.1"
+    except ValueError:
+        return None
+    if not _tcp_open(host, port):
+        return None  # nadie escucha: no hay conflicto, se arranca normal
+    if RemoteDatabase(url).check_connection(timeout=2.0):
+        return None  # es el servidor del POS, no hay que mover nada
+    return _find_free_port(port + 1)
+
+
+def _start_server_process(port: int | None = None) -> bool:
     """Abre el servidor en un proceso propio sin ventana (si el servidor es local).
 
     - Modo fuente:   python server.py
     - Modo .exe:     PosLaLoma.exe --server  (misma app en rol servidor, invisible)
+    `port` se pasa al hijo con POS_SERVER_PORT para usar un puerto alterno.
     """
     from config import IS_FROZEN
     if IS_FROZEN:
@@ -131,11 +251,16 @@ def _start_server_process() -> bool:
         if not script.exists():
             return False
         command = [sys.executable, str(script)]
+    env = None
+    if port:
+        env = dict(os.environ)
+        env["POS_SERVER_PORT"] = str(port)
     try:
         subprocess.Popen(
             command,
             creationflags=flags,
             close_fds=True,
+            env=env,
         )
         return True
     except OSError:
@@ -203,10 +328,16 @@ def _selftest() -> int:
               f"| Clientes: {len(clientes)}")
         print("Base de datos y servicios: OK" if ok else "ERROR en servicios")
         db.close()
-        return 0 if ok else 1
     except Exception as exc:
         print(f"ERROR: {exc}")
         return 1
+    try:
+        from utils.diagnostico import recolectar, texto_reporte
+        print()
+        print(texto_reporte(recolectar()))
+    except Exception:
+        pass
+    return 0 if ok else 1
 
 
 def _wait_for_server(db, seconds: int = 20) -> bool:
@@ -221,22 +352,24 @@ def _wait_for_server(db, seconds: int = 20) -> bool:
     return False
 
 
-def _try_auto_start(db) -> bool:
+def _try_auto_start(db, port: int | None = None) -> bool:
     """Levanta el servidor local automáticamente si falta. True si conecta."""
     if not _is_local_server():
         return False
     print("No se encontró el servidor; iniciándolo automáticamente...")
-    if not _start_server_process():
+    if not _start_server_process(port):
         return False
     return _wait_for_server(db, seconds=20)
 
 
-def ensure_server_available(db) -> bool:
+def ensure_server_available(db, port: int | None = None) -> bool:
     """Verifica el servidor; si falta y es local, lo crea automáticamente.
 
     Solo si el arranque automático falla (o el servidor es remoto) muestra
-    el diálogo de recuperación.
+    el diálogo de recuperación. `port` es el puerto efectivo del servidor
+    local (puede diferir de Config.SERVER_PORT si se auto-movió).
     """
+    effective_port = port or Config.SERVER_PORT
     auto_attempted = False
     while True:
         try:
@@ -245,7 +378,7 @@ def ensure_server_available(db) -> bool:
         except ServerError:
             pass
 
-        if not auto_attempted and _try_auto_start(db):
+        if not auto_attempted and _try_auto_start(db, port):
             return True
         auto_attempted = True
 
@@ -255,9 +388,9 @@ def ensure_server_available(db) -> bool:
         box.setWindowTitle("Servidor no disponible")
         box.setText("No se pudo conectar con el servidor del POS.")
         if local:
-            if _port_busy():
+            if _port_busy(effective_port):
                 box.setInformativeText(
-                    f"El puerto {Config.SERVER_PORT} está en uso (por otro\n"
+                    f"El puerto {effective_port} está en uso (por otro\n"
                     f"programa u otra instancia del servidor). Cierre el otro\n"
                     f"programa o cambie server_port en config.ini y reintente."
                 )
@@ -288,7 +421,7 @@ def ensure_server_available(db) -> bool:
         clicked = box.clickedButton()
 
         if local and clicked == start_button:
-            if not _start_server_process():
+            if not _start_server_process(port):
                 QMessageBox.warning(None, "Servidor",
                                     "No se pudo abrir server.py.")
                 continue
@@ -308,7 +441,7 @@ def open_login(db) -> bool:
     return dialog.exec() == QDialog.DialogCode.Accepted
 
 
-def main() -> int:
+def _main() -> int:
     from utils.arranque import asegurar_estructura, migrar_datos_si_vacio
 
     _redirigir_salida_sin_consola()
@@ -329,14 +462,30 @@ def main() -> int:
 
     _crear_mutex_app()
 
-    app = QApplication(sys.argv)
+    app = SafeApplication(sys.argv)
     app.setStyle("Fusion")
     app.setApplicationName("POS - La Loma")
     app.setStyleSheet(QSS_MAIN)
 
+    _diagnostico_primera_vez()
+
     if Config.MODE == "server":
-        db = RemoteDatabase(Config.SERVER_URL, station=Config.STATION)
-        if not ensure_server_available(db):
+        url = Config.SERVER_URL
+        chosen_port = None
+        if _is_local_server_url(url):
+            chosen_port = _choose_local_port(url, Config.SERVER_PORT_PINNED)
+        if chosen_port:
+            busy_port = urlparse(url).port or 8000
+            print(f"El puerto {busy_port} está ocupado por otro programa; "
+                  f"se usará el {chosen_port} para el servidor del POS.")
+            QMessageBox.information(
+                None, "Servidor del POS",
+                f"El puerto {busy_port} está ocupado por otro programa.\n"
+                f"Se usará el puerto {chosen_port} para el servidor del POS "
+                f"en esta sesión.")
+            url = f"http://127.0.0.1:{chosen_port}"
+        db = RemoteDatabase(url, station=Config.STATION)
+        if not ensure_server_available(db, chosen_port):
             return 0
     else:
         local_db = DatabaseManager(Config.DB_PATH)
@@ -363,6 +512,31 @@ def main() -> int:
     if session.token:
         db.logout()
     return code
+
+
+def main() -> int:
+    """Punto de entrada con blindaje: todo error queda en el log y en un aviso."""
+    from utils.diagnostico import configurar_logs, registrar_traceback
+
+    configurar_logs()
+    _instalar_hooks()
+    try:
+        return _main()
+    except SystemExit:
+        raise
+    except BaseException:
+        detalle = registrar_traceback("Error fatal al iniciar o ejecutar el POS")
+        try:
+            if QApplication.instance() is not None:
+                from ui.error_dialog import mostrar_error
+                mostrar_error(
+                    None, "Error fatal del POS",
+                    "El POS no pudo continuar. El detalle quedó guardado en el "
+                    "registro; puede copiarlo y reportarlo.",
+                    detalle)
+        except Exception:
+            pass
+        return 1
 
 
 if __name__ == "__main__":

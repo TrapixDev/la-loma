@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from dataclasses import fields as dataclass_fields
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -35,12 +35,19 @@ from network.remote_db import AuthError, ServerError
 from network.session import session
 from ui.login_dialog import LoginDialog
 from ui.recovery_dialog import ConnectionRecoveryDialog
-from utils.helpers import calculate_totals, format_currency, NoWheelComboBox
+from utils.helpers import (
+    ajustar_anchos_encabezado,
+    calculate_totals,
+    format_currency,
+    NoWheelComboBox,
+)
 from modules.documentos import generar_documentos
 from modules.documentos.ticket import imprimir_ticket_venta
 from modules.documentos.xml_factura import build_factura_payload
 from modules.pos.cobro_dialog import CobroDialog
 from modules.pos.cart_service import CartService
+from modules.pos.discount_dialog import ManualDiscountDialog
+from modules.promotions.promotion_service import distribuir_descuento_pago
 
 
 def _build_dataclass(cls, **kwargs):
@@ -113,9 +120,13 @@ class POSWidget(QWidget):
         self.cart: list[dict] = []
         self.client = None
         self.categories: list = []
+        self._promo_result: dict = {}
+        self._manual_discount: dict | None = None
+        self._manual_applied_amount: float = 0.0
         self._setup_ui()
         self._refresh_categories()
         self._rebuild_product_grid()
+        self._update_cart_display()
 
     def _setup_ui(self) -> None:
         root = QHBoxLayout(self)
@@ -150,7 +161,7 @@ class POSWidget(QWidget):
 
         right = QWidget()
         right.setObjectName("cartPanel")
-        right.setFixedWidth(380)
+        right.setFixedWidth(430)
         right_root = QVBoxLayout(right)
         right_root.setContentsMargins(0, 0, 0, 0)
         right_root.setSpacing(0)
@@ -171,12 +182,15 @@ class POSWidget(QWidget):
         client_row = QHBoxLayout()
         self.client_label = QLabel("Cliente: Consumidor Final")
         self.client_label.setObjectName("cartValue")
+        self.client_label.setWordWrap(True)
         client_row.addWidget(self.client_label, 1)
+        right_layout.addLayout(client_row)
+
         self.client_button = QPushButton("Seleccionar Cliente")
         self.client_button.setObjectName("primaryButton")
+        self.client_button.setFixedHeight(36)
         self.client_button.clicked.connect(self.select_client)
-        client_row.addWidget(self.client_button)
-        right_layout.addLayout(client_row)
+        right_layout.addWidget(self.client_button)
 
         self.cart_table = QTableWidget(0, 4)
         self.cart_table.setObjectName("cartTable")
@@ -184,15 +198,23 @@ class POSWidget(QWidget):
         self.cart_table.horizontalHeader().setObjectName("cartHeader")
         header = self.cart_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for col, width in ((1, 44), (2, 84), (3, 84)):
+        for col, width in ((1, 64), (2, 88), (3, 88)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
             self.cart_table.setColumnWidth(col, width)
+        ajustar_anchos_encabezado(self.cart_table, {1: 64, 2: 88, 3: 88})
         self.cart_table.verticalHeader().setVisible(False)
         self.cart_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.cart_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.cart_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.cart_table.doubleClicked.connect(self._remove_selected_item)
         right_layout.addWidget(self.cart_table, 1)
+
+        self.cart_empty_label = QLabel(
+            "Sin productos en el carrito.\nHaz clic en un producto para agregarlo.")
+        self.cart_empty_label.setObjectName("emptyState")
+        self.cart_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cart_empty_label.setWordWrap(True)
+        right_layout.addWidget(self.cart_empty_label)
 
         totals_grid = QGridLayout()
         self.subtotal_label = QLabel("₡0.00")
@@ -218,6 +240,28 @@ class POSWidget(QWidget):
         totals_grid.addWidget(self.total_label, 3, 1)
         right_layout.addLayout(totals_grid)
 
+        self.promo_label = QLabel("")
+        self.promo_label.setObjectName("cartLabel")
+        self.promo_label.setWordWrap(True)
+        self.promo_label.setStyleSheet("font-size: 13px; color: #2fbf71;")
+        right_layout.addWidget(self.promo_label)
+
+        self.manual_discount_button = QPushButton("Descuento manual…")
+        self.manual_discount_button.setObjectName("secondaryButton")
+        self.manual_discount_button.setToolTip(
+            "Aplica un descuento por porcentaje o monto a toda la venta.")
+        self.manual_discount_button.clicked.connect(self._open_manual_discount)
+        right_layout.addWidget(self.manual_discount_button)
+
+        sep_pago = QFrame()
+        sep_pago.setObjectName("separator")
+        sep_pago.setFrameShape(QFrame.Shape.HLine)
+        right_layout.addWidget(sep_pago)
+
+        pago_title = QLabel("Pago")
+        pago_title.setObjectName("cartSectionTitle")
+        right_layout.addWidget(pago_title)
+
         self.payment_group = QButtonGroup(self)
         self.payment_group.setExclusive(True)
         self.payment_buttons: dict[str, QPushButton] = {}
@@ -233,22 +277,42 @@ class POSWidget(QWidget):
         self.payment_buttons["Efectivo"].setChecked(True)
         right_layout.addLayout(payment_row)
 
+        sep_doc = QFrame()
+        sep_doc.setObjectName("separator")
+        sep_doc.setFrameShape(QFrame.Shape.HLine)
+        right_layout.addWidget(sep_doc)
+
+        doc_title = QLabel("Documento")
+        doc_title.setObjectName("cartSectionTitle")
+        right_layout.addWidget(doc_title)
+
+        doc_row = QHBoxLayout()
+        doc_row.setSpacing(8)
         self.invoice_type_combo = NoWheelComboBox()
         self.invoice_type_combo.setObjectName("mixMethod")
-        self.invoice_type_combo.addItem("Factura Electrónica", "general")
-        self.invoice_type_combo.addItem("Fact. Simplificada", "simplificada")
+        self.invoice_type_combo.addItem("Electrónica", "general")
+        self.invoice_type_combo.addItem("Simplificada", "simplificada")
+        self.invoice_type_combo.setToolTip(
+            "Tipo de documento: Electrónica (con IVA y FE) o Simplificada "
+            "(sin IVA). Por defecto Simplificada.")
+        # Por defecto se vende con factura simplificada (sin IVA).
+        self.invoice_type_combo.setCurrentIndex(1)
         self.invoice_type_combo.setFixedHeight(36)
+        self.invoice_type_combo.setMinimumWidth(120)
+        self.invoice_type_combo.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.invoice_type_combo.currentIndexChanged.connect(self._update_totals)
         self.invoice_type_combo.currentIndexChanged.connect(self._update_credit_button_state)
-        right_layout.addWidget(self.invoice_type_combo)
+        doc_row.addWidget(self.invoice_type_combo, 1)
 
         self.credit_sale_button = QPushButton("Venta a Crédito")
-        self.credit_sale_button.setObjectName("invoiceToggle")
+        self.credit_sale_button.setObjectName("creditAction")
         self.credit_sale_button.setFixedHeight(36)
         self.credit_sale_button.setEnabled(False)
         self.credit_sale_button.setToolTip("Seleccione un cliente para habilitar")
         self.credit_sale_button.clicked.connect(self._on_credit_sale)
-        right_layout.addWidget(self.credit_sale_button)
+        doc_row.addWidget(self.credit_sale_button)
+        right_layout.addLayout(doc_row)
 
         right_layout.addStretch()
 
@@ -261,7 +325,7 @@ class POSWidget(QWidget):
         right_root.addWidget(self.charge_button)
 
         self.cancel_button = QPushButton("Cancelar Venta")
-        self.cancel_button.setObjectName("dangerButton")
+        self.cancel_button.setObjectName("cancelOutline")
         self.cancel_button.clicked.connect(self._clear_cart)
         right_root.addWidget(self.cancel_button)
 
@@ -315,6 +379,18 @@ class POSWidget(QWidget):
             if column >= num_cols:
                 column = 0
                 row += 1
+        if row == 0 and column == 0:
+            if query:
+                mensaje = f"Sin resultados para “{query}”."
+            elif category_id is not None:
+                mensaje = "No hay productos activos en esta categoría."
+            else:
+                mensaje = "Aún no hay productos registrados."
+            vacio = QLabel(mensaje)
+            vacio.setObjectName("emptyState")
+            vacio.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            vacio.setWordWrap(True)
+            self.products_layout.addWidget(vacio, 0, 0, 1, num_cols)
         self.products_layout.setRowStretch(row + 1, 1)
         for index in range(num_cols):
             self.products_layout.setColumnStretch(index, 1)
@@ -325,6 +401,7 @@ class POSWidget(QWidget):
             if item["product_id"] == product_id:
                 item["quantity"] += 1
                 self._update_cart_display()
+                self._pulse_cart()
                 return
         self.cart.append(
             {
@@ -339,6 +416,7 @@ class POSWidget(QWidget):
             }
         )
         self._update_cart_display()
+        self._pulse_cart()
 
     def _remove_selected_item(self) -> None:
         row = self.cart_table.currentRow()
@@ -362,14 +440,111 @@ class POSWidget(QWidget):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.cart_table.setItem(row, column, cell)
         self.cart_table.resizeRowsToContents()
+        self.cart_empty_label.setVisible(not self.cart)
+        self.charge_button.setEnabled(bool(self.cart))
+        self.charge_button.setToolTip(
+            "" if self.cart else "Agregue productos antes de cobrar")
+        self._update_totals()
+
+    def _set_cart_pulse(self, active: bool) -> None:
+        for widget in (self.charge_button, self.total_label):
+            widget.setProperty("pulse", active)
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
+            widget.update()
+
+    def _pulse_cart(self) -> None:
+        """Destello breve de COBRAR y TOTAL al agregar un producto."""
+        if getattr(self, "_pulse_timer", None) is None:
+            self._pulse_timer = QTimer(self)
+            self._pulse_timer.setSingleShot(True)
+            self._pulse_timer.setInterval(240)
+            self._pulse_timer.timeout.connect(lambda: self._set_cart_pulse(False))
+        self._set_cart_pulse(True)
+        self._pulse_timer.start()
+
+    def _aplicar_promociones(self) -> dict:
+        """Aplica promociones de producto (conjunto/volumen) al carrito."""
+        service = None
+        if isinstance(self.services, dict):
+            service = self.services.get("promotions")
+        for item in self.cart:
+            item["discount"] = 0.0
+        self._promo_result = {}
+        if service is None or not self.cart:
+            return {}
+        try:
+            resultado = service.evaluate(self.cart)
+        except Exception:
+            return {}
+        for index, amount in (resultado.get("line_discounts") or {}).items():
+            try:
+                self.cart[int(index)]["discount"] = float(amount)
+            except (IndexError, TypeError, ValueError):
+                continue
+        self._promo_result = resultado
+        return resultado
+
+    def _calcular_descuento_manual(self, resultado: dict) -> float:
+        """Monto del descuento manual (sobre la base ya rebajada por promos)."""
+        if not self._manual_discount or not self.cart:
+            return 0.0
+        base = float((resultado or {}).get("base") or 0.0)
+        if base <= 0:
+            base = round(sum(
+                float(item.get("unit_price") or 0)
+                * float(item.get("quantity") or 0)
+                - float(item.get("discount") or 0)
+                for item in self.cart), 2)
+        if base <= 0:
+            return 0.0
+        config = self._manual_discount
+        if config.get("mode") == "percent":
+            amount = round(base * float(config.get("value") or 0) / 100, 2)
+        else:
+            amount = round(float(config.get("value") or 0), 2)
+        return max(0.0, min(amount, base))
+
+    def _open_manual_discount(self) -> None:
+        dialog = ManualDiscountDialog(self._manual_discount, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._manual_discount = dialog.resultado
         self._update_totals()
 
     def _update_totals(self) -> None:
+        resultado = self._aplicar_promociones()
+        descuento_manual = self._calcular_descuento_manual(resultado)
+        self._manual_applied_amount = descuento_manual
+        if descuento_manual > 0:
+            self.cart = distribuir_descuento_pago(self.cart, descuento_manual)
         totals = calculate_totals(self.cart, exento=(self.invoice_type_combo.currentData() == "simplificada"))
         self.subtotal_label.setText(format_currency(totals["subtotal"]))
         self.discount_label.setText(format_currency(totals["discount"]))
         self.tax_label.setText(format_currency(totals["tax_amount"]))
         self.total_label.setText(format_currency(totals["total"]))
+        aplicadas = (resultado or {}).get("applied") or []
+        lineas = [
+            f"{promo['name']} (−{format_currency(promo['amount'])})"
+            for promo in aplicadas
+        ]
+        if descuento_manual > 0:
+            motivo = (self._manual_discount or {}).get("reason") or "manual"
+            lineas.append(
+                f"Descuento manual ({motivo}) "
+                f"(−{format_currency(descuento_manual)})")
+        if lineas:
+            texto = " · ".join(lineas)
+            self.promo_label.setText(f"Descuentos: {texto}")
+            self.discount_label.setToolTip(texto)
+        else:
+            self.promo_label.setText("")
+            self.discount_label.setToolTip(
+                "Descuentos automáticos: Configuración → Promociones y descuentos")
+        self.manual_discount_button.setText(
+            "Editar descuento…" if self._manual_discount
+            else "Descuento manual…")
 
     def _current_payment_method(self) -> str | None:
         for method, button in self.payment_buttons.items():
@@ -381,13 +556,10 @@ class POSWidget(QWidget):
         if self.client is None:
             self.credit_sale_button.setEnabled(False)
             self.credit_sale_button.setToolTip("Seleccione un cliente para habilitar")
-        elif self.invoice_type_combo.currentData() == "simplificada":
-            self.credit_sale_button.setEnabled(False)
-            self.credit_sale_button.setToolTip(
-                "La venta a crédito requiere Factura Electrónica")
         else:
             self.credit_sale_button.setEnabled(True)
-            self.credit_sale_button.setToolTip("Registrar esta venta como cuenta por cobrar")
+            self.credit_sale_button.setToolTip(
+                "Registrar esta venta como cuenta por cobrar (crédito o encargo)")
 
     def _on_credit_sale(self) -> None:
         """Navega al tab de Crédito con el carrito y cliente actuales."""
@@ -406,7 +578,9 @@ class POSWidget(QWidget):
             return
         main_window._set_page("credit")
         credit_widget = main_window.credit_widget
-        if credit_widget.start_new_credit_sale(self.cart, self.client):
+        if credit_widget.start_new_credit_sale(
+                self.cart, self.client,
+                invoice_type=self.invoice_type_combo.currentData()):
             self._clear_cart()
 
     def select_client(self) -> None:
@@ -415,7 +589,11 @@ class POSWidget(QWidget):
         dialog = ClientPickerDialog(self.services, parent=self)
         if dialog.exec() and dialog.selected is not None:
             self.client = dialog.selected
-            self.client_label.setText(f"Cliente: {dialog.selected.name} ({dialog.selected.id_number})")
+            # Solo el nombre en la etiqueta (con el detalle en el tooltip)
+            # para que no ensanche el panel del carrito.
+            self.client_label.setText(f"Cliente: {dialog.selected.name}")
+            self.client_label.setToolTip(
+                f"{dialog.selected.name} ({dialog.selected.id_number})")
             self._update_credit_button_state()
 
     def _current_exchange_rate(self) -> float:
@@ -428,6 +606,28 @@ class POSWidget(QWidget):
             return rate if rate > 0 else 520.0
         except Exception:
             return 520.0
+
+    def _descuentos_por_metodo(self) -> dict:
+        """Totales por método de pago (con descuento) para el diálogo de cobro."""
+        service = None
+        if isinstance(self.services, dict):
+            service = self.services.get("promotions")
+        if service is None or not self.cart:
+            return {}
+        exento = self.invoice_type_combo.currentData() == "simplificada"
+        resultado: dict[str, dict] = {}
+        for metodo in ("Efectivo", "Tarjeta", "Sinpe"):
+            try:
+                info = service.evaluate(self.cart, payment_method=metodo)
+            except Exception:
+                continue
+            descuento = float(info.get("payment_discount") or 0.0)
+            if descuento <= 0:
+                continue
+            copia = distribuir_descuento_pago(self.cart, descuento)
+            totales = calculate_totals(copia, exento=exento)
+            resultado[metodo] = {"discount": descuento, "total": totales["total"]}
+        return resultado
 
     def process_payment(self) -> None:
         if not self.cart:
@@ -442,6 +642,7 @@ class POSWidget(QWidget):
         invoice_data = self.invoice_type_combo.currentData()
         electronic = (invoice_data == "general" and self.client is not None)
         simplified = (invoice_data == "simplificada")
+        self._aplicar_promociones()
         totals = calculate_totals(self.cart, exento=simplified)
 
         if electronic and self.client is None:
@@ -464,7 +665,8 @@ class POSWidget(QWidget):
                     return
 
         dialog = CobroDialog(
-            totals["total"], exchange_rate=self._current_exchange_rate(), parent=self)
+            totals["total"], exchange_rate=self._current_exchange_rate(),
+            descuentos=self._descuentos_por_metodo(), parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -475,10 +677,31 @@ class POSWidget(QWidget):
         payment_details = result.get("payment_details") or []
         currency = result.get("currency", "CRC")
         exchange_rate = result.get("exchange_rate", 0.0)
-        total_crc = result.get("total_crc", totals["total"])
+        payment_discount = float(result.get("discount") or 0.0)
+        if payment_discount > 0:
+            # Descuento por método: se reparte por línea (como los de producto)
+            # para que IVA, documentos y reportes cuadren.
+            self.cart = distribuir_descuento_pago(self.cart, payment_discount)
+            totals = calculate_totals(self.cart, exento=simplified)
+            try:
+                info = self.services["promotions"].evaluate(
+                    self.cart, payment_method=method)
+                self._promo_result = info
+            except Exception:
+                pass
+        total_crc = totals["total"]
 
         client_id = self.client.id if self.client is not None else None
         client_name = self.client.name if self.client is not None else "Consumidor Final"
+
+        aplicadas = list(self._promo_result.get("applied") or [])
+        if self._manual_applied_amount > 0:
+            aplicadas.append({
+                "name": "Descuento manual",
+                "type": "manual",
+                "amount": round(self._manual_applied_amount, 2),
+                "reason": (self._manual_discount or {}).get("reason", ""),
+            })
 
         sale = _build_dataclass(
             Sale,
@@ -494,6 +717,7 @@ class POSWidget(QWidget):
             cash_received=cash_received,
             change_amount=change,
             payment_details=json.dumps(payment_details, ensure_ascii=False),
+            promotions_applied=json.dumps(aplicadas, ensure_ascii=False),
             invoice_type="simplificada" if simplified else "general",
             sale_reference=uuid4().hex,
             currency=currency,
@@ -704,9 +928,12 @@ class POSWidget(QWidget):
     def _clear_cart(self) -> None:
         self.cart.clear()
         self.client = None
+        self._manual_discount = None
+        self._manual_applied_amount = 0.0
         self.client_label.setText("Cliente: Consumidor Final")
+        self.client_label.setToolTip("")
         self.payment_buttons["Efectivo"].setChecked(True)
-        self.invoice_type_combo.setCurrentIndex(0)
+        self.invoice_type_combo.setCurrentIndex(1)
         self._update_credit_button_state()
         self._update_cart_display()
 

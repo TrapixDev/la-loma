@@ -96,10 +96,13 @@ def _opt(name: str) -> str:
 
 
 def _resolve_port(server_port: str, server_url: str, default: int = 8000) -> int:
-    """Puerto del servidor: clave server_port, luego el de server_url, luego 8000."""
-    if server_port:
+    """Puerto del servidor: POS_SERVER_PORT (env), server_port, server_url, 8000."""
+    candidates = (os.environ.get("POS_SERVER_PORT", ""), server_port)
+    for candidate in candidates:
+        if not candidate:
+            continue
         try:
-            value = int(server_port)
+            value = int(candidate)
             if 0 < value <= 65535:
                 return value
         except (TypeError, ValueError):
@@ -139,6 +142,8 @@ class Config:
 
     SERVER_HOST = "0.0.0.0"
     SERVER_PORT = _resolve_port(_opt("server_port"), _opt("server_url"))
+    # Si el usuario fijó puerto o URL en config.ini no se auto-mueve el puerto.
+    SERVER_PORT_PINNED = bool(_opt("server_port") or _opt("server_url"))
     SERVER_URL = _opt("server_url") or f"http://127.0.0.1:{SERVER_PORT}"
 
     STATION = _opt("station") or "CAJA1"

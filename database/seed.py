@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -299,6 +300,27 @@ DEMO_CREDIT_SALES = [
      []),
 ]
 
+# Encargos/apartados demo: (cliente, días atrás, hora, [(código, cantidad)],
+#   prima (fracción del total), días para la entrega, ¿ya entregado?)
+DEMO_ENCARGOS = [
+    ("Hotel Mirador del Valle S.A.", 12, "10:10",
+     [("CM-101", 2)], 0.5, 20, False),
+    ("María Rodríguez Chaves", 20, "11:30",
+     [("DC-602", 3)], 0.4, 8, True),
+]
+
+# Promociones demo: (nombre, tipo, params con códigos de producto a resolver)
+DEMO_PROMOTIONS = [
+    ("Combo mesa de centro + lámpara 15%", "bundle",
+     {"required_code": "SL-004", "discount_code": "DC-602", "percent": 15}),
+    ("Sillas de comedor: 4+ 10%, 6+ 20%", "volume",
+     {"product_code": "CM-103", "tiers": [[4, 10], [6, 20]]}),
+    ("5% pagando en efectivo", "payment",
+     {"methods": ["efectivo"], "percent": 5}),
+    ("3, 6 o 12 meses sin intereses desde ₡300.000", "financing",
+     {"min_total": 300000, "months": [3, 6, 12]}),
+]
+
 
 def _demo_receipt_dir() -> str:
     override = os.environ.get("POS_DEMO_DOCS_DIR")
@@ -543,6 +565,73 @@ def seed_demo_data(db: DatabaseManager) -> None:
                      account_id),
                 )
 
+            # Encargos/apartados demo: continúan la numeración y registran la
+            # prima como primer abono de la cuenta.
+            first_order = len(DEMO_SALES) + len(DEMO_CREDIT_SALES) + 1
+            for offset, (client, days_ago, time_str, items, prima_fraction,
+                         dias_entrega, entregado) in enumerate(DEMO_ENCARGOS):
+                number = first_order + offset
+                created = (now - timedelta(days=days_ago)).replace(
+                    hour=int(time_str[:2]), minute=int(time_str[3:]), second=0,
+                    microsecond=0)
+                stamp = created.strftime("%Y-%m-%d %H:%M:%S")
+                subtotal = 0.0
+                tax = 0.0
+                line_items = []
+                for code, qty in items:
+                    unit_price = prices[code]
+                    item_subtotal = unit_price * qty
+                    item_tax = round(item_subtotal * 0.13, 2)
+                    subtotal += item_subtotal
+                    tax += item_tax
+                    line_items.append((code, qty, unit_price, item_tax))
+                total = round(subtotal + tax, 2)
+                cursor = connection.execute(
+                    "INSERT INTO sales (invoice_number, client_id, subtotal, discount, "
+                    "tax_amount, total, payment_method, cash_received, change_amount, "
+                    "status, station, user_id, user_name, created_at) "
+                    "VALUES (?, ?, ?, 0, ?, ?, 'credito', 0, 0, 'completada', 'CAJA1', "
+                    "NULL, 'Administrador', ?)",
+                    (f"V-{number:05d}", client_ids.get(client, 1),
+                     round(subtotal, 2), round(tax, 2), total, stamp),
+                )
+                sale_id = cursor.lastrowid
+                for code, qty, unit_price, item_tax in line_items:
+                    product = next(p for p in DEMO_PRODUCTS if p[1] == code)
+                    connection.execute(
+                        "INSERT INTO sale_items (sale_id, product_id, product_name, quantity, "
+                        "unit_price, unit_cost, discount, tax_amount, total) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                        (sale_id, product_ids[code], product[3], qty, unit_price,
+                         product[5], item_tax, round(unit_price * qty + item_tax, 2)),
+                    )
+                delivery = created + timedelta(days=dias_entrega)
+                delivered_stamp = (delivery.strftime("%Y-%m-%d %H:%M:%S")
+                                   if entregado else "")
+                prima = round(total * prima_fraction, 2)
+                cursor = connection.execute(
+                    "INSERT INTO credit_accounts (sale_id, client_id, invoice_number, "
+                    "total, amount_paid, balance, status, account_type, delivery_status, "
+                    "delivered_at, due_date, notes, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'encargo', ?, ?, ?, "
+                    "'Encargo (demo)', ?, ?)",
+                    (sale_id, client_ids.get(client, 1), f"V-{number:05d}", total,
+                     prima, round(total - prima, 2),
+                     "pagada" if prima >= total else "pendiente",
+                     "entregado" if entregado else "pendiente",
+                     delivered_stamp, delivery.strftime("%Y-%m-%d"),
+                     stamp, stamp),
+                )
+                account_id = cursor.lastrowid
+                if prima > 0:
+                    connection.execute(
+                        "INSERT INTO credit_payments (credit_account_id, amount, "
+                        "payment_method, notes, user_id, user_name, created_at) "
+                        "VALUES (?, ?, 'efectivo', 'Prima del encargo (demo)', NULL, "
+                        "'Administrador', ?)",
+                        (account_id, prima, stamp),
+                    )
+
     # Gastos de demostración: solo en bases sin gastos.
     if db.execute_query("SELECT COUNT(*) AS t FROM expenses")[0]["t"] == 0:
         for category, days_ago, amount, description, method in DEMO_EXPENSES:
@@ -569,6 +658,40 @@ def seed_demo_data(db: DatabaseManager) -> None:
         "ON CONFLICT(name) DO UPDATE SET value = excluded.value",
         (int(max_number or 0),),
     )
+
+    # Promociones de demostración (idempotente por nombre).
+    demo_promotions = _build_demo_promotions(product_ids)
+    if demo_promotions:
+        existing = {row["name"] for row in
+                    db.execute_query("SELECT name FROM promotions")}
+        for name, promo_type, params in demo_promotions:
+            if name in existing:
+                continue
+            db.execute_insert(
+                "INSERT INTO promotions (name, type, params) VALUES (?, ?, ?)",
+                (name, promo_type, json.dumps(params, ensure_ascii=False)),
+            )
+
+
+def _build_demo_promotions(product_ids: dict) -> list[tuple]:
+    """Traduce los códigos de producto de DEMO_PROMOTIONS a ids reales."""
+    result = []
+    for name, promo_type, params in DEMO_PROMOTIONS:
+        data = dict(params)
+        if promo_type == "bundle":
+            required = product_ids.get(data.pop("required_code", ""))
+            target = product_ids.get(data.pop("discount_code", ""))
+            if not required or not target:
+                continue
+            data["product_id"] = required
+            data["discount_product_id"] = target
+        elif promo_type == "volume":
+            product = product_ids.get(data.pop("product_code", ""))
+            if not product:
+                continue
+            data["product_id"] = product
+        result.append((name, promo_type, data))
+    return result
 
 
 def _seed_db_from_cli() -> None:
