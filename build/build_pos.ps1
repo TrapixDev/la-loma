@@ -2,13 +2,13 @@
 # Requiere:  python -m pip install -r requirements.txt pyinstaller
 #            Inno Setup 6 (ISCC.exe) en %ProgramFiles(x86)%\Inno Setup 6
 # Uso:       powershell -ExecutionPolicy Bypass -File build\build_pos.ps1
-# Salida:    dist\PosLaLoma_Setup_1.0.0.exe
+# Salida:    dist\PosLaLoma_Setup_1.0.1.exe
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$Version = "1.0.0"
+$Version = "1.0.1"
 $Name = "PosLaLoma"
 $Assets = Join-Path $Root "build\assets"
 $Icon = Join-Path $Assets "icon.ico"
@@ -17,6 +17,18 @@ $Icon = Join-Path $Assets "icon.ico"
 Write-Host "== Ejecutando tests =="
 python -m tests.run_all
 if ($LASTEXITCODE -ne 0) { throw "Los tests fallaron; no se compila." }
+
+# ---------- 1b) Auditoría de dependencias (opcional, no bloquea) ----------
+python -m pip_audit --version *> $null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "== Auditoría de dependencias (pip-audit) =="
+    python -m pip_audit -r requirements.txt
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "pip-audit reportó vulnerabilidades; revise antes de publicar."
+    }
+} else {
+    Write-Host "pip-audit no está instalado; se omite la auditoría (pip install pip-audit)."
+}
 
 # ---------- 2) PyInstaller (onedir, sin consola) ----------
 Write-Host "== PyInstaller =="

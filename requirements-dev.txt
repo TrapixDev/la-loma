@@ -3,3 +3,9 @@
 pytest>=8.0
 pyinstaller>=6.0
 pillow>=10.0
+
+# Seguridad (solo desarrollo):
+#  - pip-audit: audita requirements.txt contra vulnerabilidades conocidas.
+#  - cryptography: genera el certificado HTTPS con tools/generar_certificado.py.
+pip-audit>=2.7
+cryptography>=43.0

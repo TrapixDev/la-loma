@@ -39,7 +39,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 
 
@@ -146,9 +146,32 @@ class Config:
     SERVER_PORT_PINNED = bool(_opt("server_port") or _opt("server_url"))
     SERVER_URL = _opt("server_url") or f"http://127.0.0.1:{SERVER_PORT}"
 
+    # Solo acepta conexiones desde redes privadas/locales (lan_only = 0 para
+    # desactivar). El POS es una aplicación de red interna: nunca debe quedar
+    # expuesto a Internet.
+    LAN_ONLY = _opt("lan_only") != "0"
+
+    # --- TLS opcional (HTTPS) -------------------------------------------------
+    # Para cifrar el tráfico en la red local: genere un certificado con
+    # tools/generar_certificado.py (o ponga tls_cert/tls_key en config.ini).
+    # Las estaciones deben confiar en el certificado con tls_ca (o usar
+    # tls_insecure = 1 solo dentro de la red del negocio).
+    TLS_CERT = _opt("tls_cert") or str(appdata_dir() / "certs" / "server.pem")
+    TLS_KEY = _opt("tls_key")
+    TLS_CA = _opt("tls_ca")
+    TLS_INSECURE = _opt("tls_insecure") == "1"
+
     STATION = _opt("station") or "CAJA1"
 
-    SESSION_HOURS = 12
+    def _opt_int(name: str, default: int, minimo: int = 1,
+                 maximo: int = 10_000) -> int:
+        try:
+            valor = int(_opt(name) or default)
+        except (TypeError, ValueError):
+            return default
+        return max(minimo, min(maximo, valor))
+
+    SESSION_HOURS = _opt_int("session_hours", 12, minimo=1, maximo=72)
     MAX_LOGIN_ATTEMPTS = 5
     LOCKOUT_MINUTES = 15
     BACKUP_HOURS = 6

@@ -12,11 +12,13 @@ intentos fallidos de PIN.
 
 import base64
 import hashlib
+import ipaddress
 import json
 import re
 import shutil
 import socket
 import sqlite3
+import ssl
 import sys
 import threading
 import time
@@ -40,6 +42,11 @@ FORBIDDEN_PREFIXES = ("PRAGMA", "ATTACH", "DETACH", "VACUUM", "REINDEX",
 AUTH_HEADER = "Authorization"
 AUTH_PREFIX = "Bearer "
 DETAIL_MAX = 300
+# Límites de entrada: evitan agotar memoria con cuerpos gigantes o listas de
+# parámetros enormes (las fotos de productos son lo más grande que se envía).
+MAX_BODY_BYTES = 4_000_000
+MAX_PARAMS = 500
+MAX_PARAM_CHARS = 100_000
 
 # Política de tablas: los clientes solo pueden escribir tablas de negocio.
 # `users` queda fuera de todo DML (se administra con /api/login y /api/setup)
@@ -59,6 +66,54 @@ FORBIDDEN_SELECT_TABLES = {"users", "sqlite_master", "sqlite_schema"}
 _TABLE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")
 RATE_WINDOW_SECONDS = 600
 RATE_MAX_ATTEMPTS = 20
+
+
+def parse_content_length(value: str | None) -> int | None:
+    """Devuelve el largo del cuerpo o None si la cabecera es inválida."""
+    if value is None:
+        return 0
+    try:
+        length = int(value)
+    except (TypeError, ValueError):
+        return None
+    return length if length >= 0 else None
+
+
+def ip_permitida(ip: str) -> bool:
+    """True si la IP puede conectarse al POS (solo redes privadas/locales).
+
+    El POS es una red interna: si alguien llega desde una IP pública, la
+    petición se rechaza (protege contra exponer el puerto a Internet).
+    """
+    if not Config.LAN_ONLY:
+        return True
+    texto = (ip or "").split("%")[0].strip()
+    try:
+        direccion = ipaddress.ip_address(texto)
+    except ValueError:
+        return False
+    if direccion.version == 6 and direccion.ipv4_mapped is not None:
+        direccion = direccion.ipv4_mapped
+    return bool(direccion.is_private or direccion.is_loopback
+                or direccion.is_link_local)
+
+
+def valid_params(raw) -> tuple:
+    """Normaliza y valida la lista de parámetros de una consulta."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("Parámetros inválidos")
+    if len(raw) > MAX_PARAMS:
+        raise ValueError("Demasiados parámetros en la consulta")
+    for value in raw:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raise ValueError("Parámetros binarios no permitidos")
+        if isinstance(value, str) and len(value) > MAX_PARAM_CHARS:
+            raise ValueError("Parámetro demasiado largo")
+        if isinstance(value, (dict, list, tuple)):
+            raise ValueError("Parámetros anidados no permitidos")
+    return tuple(raw)
 
 
 def _statement_table(statement: str, keyword: str) -> str:
@@ -167,6 +222,7 @@ class POSServer(ThreadingHTTPServer):
         super().__init__(server_address, handler)
         self.db_path = db_path
         self.station = station
+        self.tls = False
         self.sessions: dict[str, dict] = {}
         self.transactions: dict[str, dict] = {}
         self.login_attempts: dict[str, list[float]] = {}
@@ -288,6 +344,9 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- rutas ----------
 
     def do_GET(self) -> None:
+        if not ip_permitida(self.client_address[0]):
+            self._send_json({"error": "Origen no permitido"}, 403)
+            return
         path = self.path.split("?")[0]
         if path == "/api/health":
             self._health({})
@@ -306,6 +365,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": "Ruta no encontrada"}, 404)
 
     def do_POST(self) -> None:
+        if not ip_permitida(self.client_address[0]):
+            self._send_json({"error": "Origen no permitido"}, 403)
+            return
+        length = parse_content_length(self.headers.get("Content-Length"))
+        if length is None:
+            self._send_json({"error": "Cabecera Content-Length inválida"}, 400)
+            return
+        if length > MAX_BODY_BYTES:
+            self._send_json({"error": "Solicitud demasiado grande"}, 413)
+            return
         path = self.path.split("?")[0]
         handlers = {
             "/api/health": self._health,
@@ -348,16 +417,20 @@ class Handler(BaseHTTPRequestHandler):
             for archivo in sorted(carpeta.glob("*.exe"), key=lambda p: p.stat().st_mtime,
                                   reverse=True):
                 try:
+                    data = archivo.read_bytes()
                     setups.append({
                         "filename": archivo.name,
                         "size": archivo.stat().st_size,
-                        "md5": hashlib.md5(archivo.read_bytes()).hexdigest(),
+                        "md5": hashlib.md5(data).hexdigest(),
+                        "sha256": hashlib.sha256(data).hexdigest(),
                     })
                 except OSError:
                     continue
         self._send_json({
             "server_version": Config.APP_VERSION,
-            "server_url": f"http://{self.server.server_address[0]}:{self.server.server_address[1]}",
+            "server_url": (f"{'https' if self.server.tls else 'http'}://"
+                           f"{self.server.server_address[0]}:"
+                           f"{self.server.server_address[1]}"),
             "setups": setups,
         })
 
@@ -512,6 +585,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             statement = validate_sql(str(payload.get("sql") or ""))
+            params = valid_params(payload.get("params"))
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
             return
@@ -520,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         connection = self.server._open_conn()
         try:
-            result = self._run_query(connection, statement, tuple(payload.get("params") or []))
+            result = self._run_query(connection, statement, params)
         finally:
             connection.close()
         self._send_json(result)
@@ -531,6 +605,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             statement = validate_sql(str(payload.get("sql") or ""))
+            params = valid_params(payload.get("params"))
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
             return
@@ -539,7 +614,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         connection = self.server._open_conn()
         try:
-            result = self._run_query(connection, statement, tuple(payload.get("params") or []))
+            result = self._run_query(connection, statement, params)
         finally:
             connection.close()
         self._audit(session, "EXECUTE", statement)
@@ -592,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             statement = validate_sql(str(payload.get("sql") or ""))
-            params = tuple(payload.get("params") or [])
+            params = valid_params(payload.get("params"))
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
             return
@@ -789,6 +864,25 @@ def _lan_ip() -> str:
         probe.close()
 
 
+def _activar_tls(server: POSServer) -> bool:
+    """Envuelve el socket del servidor en TLS si hay certificado configurado."""
+    if not Config.TLS_CERT:
+        return False
+    certificado = Path(Config.TLS_CERT)
+    if not certificado.is_file():
+        return False
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(str(certificado), Config.TLS_KEY or None)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.tls = True
+        print(f"TLS activo con el certificado {certificado}")
+        return True
+    except (OSError, ssl.SSLError) as exc:
+        print(f"Advertencia: no se pudo activar TLS ({exc}). Se usará HTTP.")
+        return False
+
+
 def start_server(db_path: str = "", host: str = "", port: int | None = None,
                  station: str = "") -> POSServer:
     """Arranca el servidor; usado por server.py y por las pruebas.
@@ -819,16 +913,19 @@ def start_server(db_path: str = "", host: str = "", port: int | None = None,
         print(f"Advertencia: no se pudo crear el respaldo inicial: {exc}")
 
     server = POSServer((host, port), Handler, db_path, station)
+    _activar_tls(server)
+    esquema = "https" if server.tls else "http"
     if port == 0:
-        print(f"Servidor POS La Loma escuchando en 127.0.0.1:{server.server_address[1]}")
+        print(f"Servidor POS La Loma escuchando en "
+              f"{esquema}://127.0.0.1:{server.server_address[1]}")
         return server
     address = _lan_ip() if host in ("0.0.0.0", "") else host
     print("=" * 64)
     print("  SERVICIO POS - LA LOMA  ACTIVO")
-    print(f"  Dirección para las estaciones:  http://{address}:{port}")
+    print(f"  Dirección para las estaciones:  {esquema}://{address}:{port}")
     print()
     print("  1) En cada estación (archivo config.py):")
-    print(f"     SERVER_URL = 'http://{address}:{port}'")
+    print(f"     SERVER_URL = '{esquema}://{address}:{port}'")
     print("  2) Ejecute  python main.py  en cada estación.")
     print("  3) MANTENGA ABIERTA ESTA VENTANA mientras se vende.")
     print("  4) Si otras PCs no conectan, permita Python en el Firewall de")

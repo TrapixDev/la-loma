@@ -20,10 +20,16 @@ def _junto_al_exe() -> Path:
 
 
 def asegurar_estructura() -> None:
-    """Crea las carpetas de datos (respaldos, fotos, updates)."""
+    """Crea las carpetas de datos (respaldos, fotos, updates) y endurece ACLs."""
     for carpeta in (Path(Config.BACKUP_DIR), Path(Config.PRODUCT_IMAGES_DIR),
                     Path(Config.UPDATE_DIR), Path(Config.DB_PATH).parent):
         carpeta.mkdir(parents=True, exist_ok=True)
+    try:
+        from utils.seguridad import endurecer_datos
+
+        endurecer_datos()
+    except Exception:
+        pass
 
 
 def migrar_datos_si_vacio() -> bool:

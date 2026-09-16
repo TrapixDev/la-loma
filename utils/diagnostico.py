@@ -9,6 +9,7 @@ import os
 import shutil
 import socket
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -193,6 +194,41 @@ def _log_check() -> dict:
                   f"Los errores se guardan en {log_path()}")
 
 
+def _seguridad_check() -> dict:
+    """Cifrado del tráfico (HTTPS) y permisos de las carpetas de datos."""
+    from utils import seguridad
+
+    acl = ("ACLs restringidas al usuario actual" if seguridad.disponible()
+           else "ACLs no aplicables (fuera de Windows)")
+    certificado = Path(Config.TLS_CERT) if Config.TLS_CERT else None
+    if certificado and certificado.is_file():
+        return _check(NIVEL_OK, "Seguridad",
+                      f"HTTPS activo ({certificado.name}); {acl}")
+    return _check(NIVEL_AVISO, "Seguridad",
+                  "El servidor usa HTTP dentro de la red local (no lo exponga a "
+                  "Internet). Para cifrar el tráfico: "
+                  "python tools/generar_certificado.py")
+
+
+def _firewall_check() -> dict | None:
+    """Comprueba si existe la regla de firewall del POS (solo Windows)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        result = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule",
+             "name=POS La Loma"],
+            capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode == 0 and "POS La Loma" in result.stdout:
+        return _check(NIVEL_OK, "Firewall",
+                      "Regla 'POS La Loma' configurada para la red local")
+    return _check(NIVEL_AVISO, "Firewall",
+                  "Sin regla 'POS La Loma'. Ejecute build\\firewall_pos.ps1 "
+                  "como administrador para permitir solo la red local")
+
+
 def recolectar(base: Path | None = None, db_path: str | None = None,
                port: int | None = None) -> list[dict]:
     """Ejecuta los chequeos de instalación y devuelve la lista de resultados."""
@@ -208,6 +244,10 @@ def recolectar(base: Path | None = None, db_path: str | None = None,
         checks.append(impresoras)
     checks.append(_database_check(db_path))
     checks.append(_log_check())
+    checks.append(_seguridad_check())
+    firewall = _firewall_check()
+    if firewall is not None:
+        checks.append(firewall)
     return checks
 
 

@@ -148,6 +148,11 @@ class SafeApplication(QApplication):
 
 
 def build_services(db) -> dict:
+    from utils import secretos
+    try:
+        secretos.migrar_secretos_en_db(db)
+    except Exception:
+        pass
     return {
         "db": db,
         "category": CategoryService(db),

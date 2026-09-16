@@ -1,9 +1,9 @@
-INSTRUCCIONES - POS La Loma 1.0.0
+INSTRUCCIONES - POS La Loma 1.0.1
 =================================
 
 Instalación en la PC del negocio (1 vez)
 ----------------------------------------
-1. Copie PosLaLoma_Setup_1.0.0.exe en la PC (por USB o red).
+1. Copie PosLaLoma_Setup_1.0.1.exe en la PC (por USB o red).
 2. Doble clic y Siguiente/Siguiente/Finalizar. No pide permisos de
    administrador. Se crean accesos directos en Escritorio e Inicio.
 3. Al abrir el programa por primera vez pide crear el PIN de acceso
@@ -105,11 +105,28 @@ disco, puerto, impresoras, base de datos).
 
 Seguridad
 ---------
-- El PIN de acceso y las claves de Hacienda se guardan en la base local.
-  No exponga el puerto 8000 a internet; mantenga la PC servidor en la red
-  interna del negocio.
-- Proteja la carpeta %APPDATA%\PosLaLoma (y los respaldos) con la cuenta
-  de Windows del negocio.
+- El PIN de acceso nunca se guarda en texto plano (hash PBKDF2 con sal).
+  La clave y el PIN del proveedor de factura electronica se guardan
+  cifrados con la DPAPI de Windows.
+- Permisos: la carpeta %APPDATA%\PosLaLoma queda con ACLs que solo
+  permiten el acceso al usuario de Windows que usa el POS, SYSTEM y los
+  Administradores (se aplica solo al abrir el programa).
+- Firewall: ejecute build\firewall_pos.ps1 como administrador en la PC
+  servidor para aceptar el puerto solo desde la red local
+  (remoteip=LocalSubnet). NO exponga el puerto a Internet; si necesita
+  acceso remoto use una VPN.
+- El servidor solo acepta conexiones de redes privadas (10.x, 172.16-31.x,
+  192.168.x, localhost). Se puede desactivar con lan_only = 0 en config.ini
+  (no recomendado).
+- HTTPS opcional: en la PC servidor ejecute
+      python tools\generar_certificado.py --host 192.168.1.10
+  (requiere "pip install cryptography" solo para generarlo) y en cada caja
+  ponga en config.ini:
+      server_url = https://192.168.1.10:8000
+      tls_ca = %APPDATA%\PosLaLoma\certs\server.pem
+  o, dentro de la red del negocio, tls_insecure = 1 (menos seguro).
+- Las actualizaciones que sirve el servidor se verifican con SHA-256 antes
+  de instalarse, y todo el movimiento queda en el registro de auditoria.
 
 Actualizar el programa
 ----------------------

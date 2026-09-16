@@ -1,5 +1,6 @@
 """Tests del servidor: endpoints de actualización, política de tablas y login."""
 
+import hashlib
 import json
 import os
 import sys
@@ -81,6 +82,53 @@ def test_update_info_y_descarga():
         srv.server_close()
         config_module.Config.UPDATE_DIR = original_dir
         fake.unlink(missing_ok=True)
+
+
+def test_descarga_verifica_sha256():
+    import config as config_module
+    from network import updater
+
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    fake = TMP_DIR / "PosLaLoma_Setup_9.9.8.exe"
+    contenido = b"FAKE-SETUP-SHA256"
+    fake.write_bytes(contenido)
+
+    original_dir = config_module.Config.UPDATE_DIR
+    original_url = config_module.Config.SERVER_URL
+    config_module.Config.UPDATE_DIR = str(TMP_DIR)
+    srv = start_server(port=0)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.3)
+    config_module.Config.SERVER_URL = f"http://127.0.0.1:{srv.server_address[1]}"
+    destino = TMP_DIR / "descargas"
+    try:
+        info = updater.consultar_actualizaciones()
+        setup = updater.setup_mas_nuevo(info)
+        assert setup is not None
+        assert setup.get("sha256") == hashlib.sha256(contenido).hexdigest()
+        ruta = updater.descargar_setup(setup, destino)
+        assert ruta.read_bytes() == contenido
+
+        alterado = {**setup, "sha256": "0" * 64}
+        try:
+            updater.descargar_setup(alterado, destino)
+            raise AssertionError("debía rechazar el hash alterado")
+        except updater.UpdateError:
+            pass
+
+        solo_md5 = {k: v for k, v in setup.items() if k != "sha256"}
+        ruta = updater.descargar_setup(solo_md5, destino)
+        assert ruta.read_bytes() == contenido
+        print("[OK] descarga verifica SHA-256 (y MD5 como respaldo)")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        config_module.Config.UPDATE_DIR = original_dir
+        config_module.Config.SERVER_URL = original_url
+        fake.unlink(missing_ok=True)
+        import shutil
+        shutil.rmtree(destino, ignore_errors=True)
 
 
 def test_validate_sql_politica_tablas():

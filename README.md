@@ -1,4 +1,4 @@
-# POS La Loma 1.0.0
+# POS La Loma 1.0.1
 
 Punto de venta para Mueblería y Aserradero La Loma (negocio pequeño).
 Python + PyQt6, base SQLite, servidor local para varias cajas (LAN).
@@ -20,7 +20,7 @@ Python + PyQt6, base SQLite, servidor local para varias cajas (LAN).
 
 ## Instalación (PC del negocio)
 
-1. Ejecute `PosLaLoma_Setup_1.0.0.exe` (Siguiente/Siguiente/Finalizar).
+1. Ejecute `PosLaLoma_Setup_1.0.1.exe` (Siguiente/Siguiente/Finalizar).
    Instala por usuario, sin permisos de administrador.
 2. Siga `INSTRUCCIONES.txt` (carpeta compartida, IP fija, firewall, cajas).
 
@@ -80,10 +80,22 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
 
 ## Seguridad (para producción)
 
-- No exponga el puerto 8000 a internet; solo red local del negocio.
-- PIN de acceso y credenciales de Hacienda viven en la BD local; proteja
-  `%APPDATA%\PosLaLoma` con la cuenta de Windows.
-- Firewall de la PC servidor: permitir TCP 8000 en redes privadas.
+- No exponga el puerto 8000 a internet; solo red local del negocio (para
+  acceso remoto use una VPN, nunca abra el puerto en el router).
+- **Credenciales fiscales cifradas**: la clave y el PIN del proveedor FE se
+  guardan cifrados con la DPAPI de Windows (nunca en texto plano).
+- **Permisos restringidos**: `%APPDATA%\PosLaLoma` queda con ACLs que solo
+  permiten acceso al usuario que ejecuta el POS, SYSTEM y Administradores.
+- **Firewall**: ejecute `build\firewall_pos.ps1` como administrador para
+  aceptar conexiones al puerto solo desde la red local (`remoteip=LocalSubnet`).
+- **Solo redes privadas**: el servidor rechaza peticiones desde IP públicas
+  (`lan_only = 0` en config.ini lo desactiva, no recomendado).
+- **HTTPS opcional**: genere un certificado con
+  `python tools/generar_certificado.py --host <IP-del-servidor>` y las cajas
+  usan `tls_ca` (o `tls_insecure = 1` dentro de la red).
+- **Límites de entrada**: tamaño máximo de petición, de parámetros y de fotos;
+  el tráfico entre cajas y servidor se audita en `audit_log`.
+- **Actualizaciones verificadas** con SHA-256 antes de instalar.
 
 ## Notas fiscales pendientes
 
@@ -96,5 +108,9 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
 
 ## Versiones
 
+- 1.0.1 — seguridad: credenciales cifradas con DPAPI, ACLs restringidas en
+  `%APPDATA%\PosLaLoma`, servidor solo para redes privadas con límites de
+  entrada, HTTPS opcional, firewall acotado a la red local y actualizaciones
+  verificadas con SHA-256.
 - 1.0.0 — release inicial del instalador (USD, impresoras, tickets, exención,
   carpeta compartida, actualizaciones LAN, idempotencia).

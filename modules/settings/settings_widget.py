@@ -30,6 +30,7 @@ from utils.helpers import (
 
 from modules.promotions.promotion_dialog import PromotionDialog, describe_promotion
 from modules.promotions.promotion_service import TYPE_LABELS
+from utils import secretos
 
 CONFIG_KEYS = [
     "company_name",
@@ -434,7 +435,7 @@ class SettingsWidget(QWidget):
             self.certificate_input.setText(path)
 
     def _config_values(self) -> dict:
-        return {
+        return secretos.cifrar_campos({
             "company_name": self.company_name_input.text().strip(),
             "company_id": self.company_id_input.text().strip(),
             "phone": self.phone_input.text().strip(),
@@ -448,9 +449,10 @@ class SettingsWidget(QWidget):
             "branch": self.branch_input.text().strip(),
             "terminal": self.terminal_input.text().strip(),
             "consecutive_fe": self.consecutive_input.text().strip(),
-        }
+        })
 
     def _apply_config(self, config: dict) -> None:
+        config = secretos.descifrar_campos(config)
         self.company_name_input.setText(config.get("company_name", ""))
         self.company_id_input.setText(config.get("company_id", ""))
         self.phone_input.setText(config.get("phone", ""))

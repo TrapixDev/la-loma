@@ -1,9 +1,10 @@
 """Actualización del POS por red local (LAN/WLAN).
 
 La estación consulta al servidor (SERVER_URL) qué setup hay disponible en la
-carpeta de updates, lo descarga, verifica su MD5 y lo ejecuta en modo
-silencioso (Inno Setup). El servidor central se actualiza a sí mismo dejando
-el setup en %APPDATA%\\PosLaLoma\\updates.
+carpeta de updates, lo descarga, verifica su hash (SHA-256; MD5 solo como
+respaldo de servidores viejos) y lo ejecuta en modo silencioso (Inno Setup).
+El servidor central se actualiza a sí mismo dejando el setup en
+%APPDATA%\\PosLaLoma\\updates.
 """
 
 import hashlib
@@ -84,14 +85,25 @@ def hay_actualizacion(info: dict) -> tuple[bool, str, dict | None]:
 
 
 def descargar_setup(setup: dict, destino: Path) -> Path:
-    """Descarga el setup del servidor, verifica el MD5 y devuelve la ruta."""
+    """Descarga el setup del servidor, verifica su hash y devuelve la ruta.
+
+    Se prefiere SHA-256 (el servidor lo publica); si no está, se acepta MD5
+    por compatibilidad con servidores viejos.
+    """
     destino.mkdir(parents=True, exist_ok=True)
     ruta = destino / str(setup["filename"])
     url = f"{Config.SERVER_URL}/api/update/download/{setup['filename']}"
     data = _get(url, timeout=300)
-    md5_esperado = str(setup.get("md5") or "").lower()
-    if md5_esperado and hashlib.md5(data).hexdigest() != md5_esperado:
-        raise UpdateError("El archivo descargado no coincide con el MD5 esperado.")
+    sha256_esperado = str(setup.get("sha256") or "").lower()
+    if sha256_esperado:
+        if hashlib.sha256(data).hexdigest() != sha256_esperado:
+            raise UpdateError(
+                "El archivo descargado no coincide con el SHA-256 esperado.")
+    else:
+        md5_esperado = str(setup.get("md5") or "").lower()
+        if md5_esperado and hashlib.md5(data).hexdigest() != md5_esperado:
+            raise UpdateError(
+                "El archivo descargado no coincide con el MD5 esperado.")
     ruta.write_bytes(data)
     return ruta
 

@@ -8,10 +8,12 @@ transacciones atómicas en el servidor.
 
 import http.client
 import json
+import ssl
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
 
+from config import Config
 from network.session import session
 
 
@@ -73,6 +75,21 @@ class RemoteDatabase:
 
     # ---------- transporte ----------
 
+    def _ssl_context(self):
+        """Contexto TLS para https: CA configurada o modo inseguro explícito."""
+        if not self.base_url.lower().startswith("https"):
+            return None
+        if Config.TLS_INSECURE:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            return context
+        cafile = Config.TLS_CA or None
+        try:
+            return ssl.create_default_context(cafile=cafile)
+        except (OSError, ssl.SSLError):
+            return ssl.create_default_context()
+
     def _post(self, path: str, payload: dict, login_attempt: bool = False) -> dict:
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -84,7 +101,8 @@ class RemoteDatabase:
         if session.token:
             request.add_header("Authorization", f"Bearer {session.token}")
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(request, timeout=15,
+                                        context=self._ssl_context()) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             message = ""
@@ -187,7 +205,8 @@ class RemoteDatabase:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout,
+                                        context=self._ssl_context()) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 return bool(payload.get("ok"))
         except Exception:
