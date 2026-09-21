@@ -5,6 +5,90 @@ def format_currency(amount: float, currency: str = "CRC") -> str:
     return f"₡{amount:,.2f}"
 
 
+_UNIDADES = (
+    "", "UNO", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO",
+    "NUEVE", "DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE",
+    "DIECISÉIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE", "VEINTE",
+)
+_DECENAS = ("", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA",
+            "SETENTA", "OCHENTA", "NOVENTA")
+_CENTENAS = ("", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS",
+             "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS",
+             "NOVECIENTOS")
+
+
+def _tres_digitos(numero: int) -> str:
+    if numero == 0:
+        return ""
+    if numero == 100:
+        return "CIEN"
+    partes: list[str] = []
+    centenas, resto = divmod(numero, 100)
+    if centenas:
+        partes.append(_CENTENAS[centenas])
+    if resto:
+        if resto <= 20:
+            partes.append(_UNIDADES[resto])
+        elif resto < 30:
+            partes.append("VEINTI" + _UNIDADES[resto - 20])
+        else:
+            decenas, unidades = divmod(resto, 10)
+            texto = _DECENAS[decenas]
+            if unidades:
+                texto += " Y " + _UNIDADES[unidades]
+            partes.append(texto)
+    return " ".join(partes)
+
+
+def _antes_de_mil(texto: str) -> str:
+    """Ajusta el final para ir delante de mil/millón (uno→un, veintiuno→veintiún)."""
+    return texto.replace("VEINTIUNO", "VEINTIÚN").replace("UNO", "UN")
+
+
+def _numero_en_letras(numero: int) -> str:
+    if numero == 0:
+        return "CERO"
+    if numero < 1000:
+        return _tres_digitos(numero)
+    millones, resto = divmod(numero, 1_000_000)
+    miles, unidades = divmod(resto, 1000)
+    partes: list[str] = []
+    if millones:
+        if millones == 1:
+            partes.append("UN MILLÓN")
+        else:
+            partes.append(_antes_de_mil(_numero_en_letras(millones))
+                         + " MILLONES")
+    if miles:
+        if miles == 1:
+            partes.append("MIL")
+        else:
+            partes.append(_antes_de_mil(_tres_digitos(miles)) + " MIL")
+    if unidades:
+        partes.append(_tres_digitos(unidades))
+    return " ".join(partes)
+
+
+def monto_en_letras(monto: float, currency: str = "CRC") -> str:
+    """Monto en letras para tickets: 'QUINCE MIL COLONES CON 00/100'."""
+    try:
+        total = float(monto or 0)
+    except (TypeError, ValueError):
+        total = 0.0
+    negativo = total < 0
+    total = abs(round(total, 2))
+    entero = int(total)
+    centavos = int(round((total - entero) * 100))
+    if centavos == 100:
+        entero += 1
+        centavos = 0
+    moneda = "DÓLARES" if str(currency).upper() == "USD" else "COLONES"
+    texto = f"{_numero_en_letras(entero)} {moneda}"
+    if centavos:
+        texto += f" CON {centavos:02d}/100"
+    return ("MENOS " + texto) if negativo else texto
+
+
 def calculate_totals(items: list[dict], exento: bool = False) -> dict:
     """Calcula subtotal, descuento, impuesto y total a partir de los items del carrito.
 

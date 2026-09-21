@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtPrintSupport import QPrinterInfo
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -72,6 +73,7 @@ class SettingsWidget(QWidget):
         self.memory_config: dict = {}
         self._setup_ui()
         self._load_config()
+        self._load_empresa_extra()
 
     # ---------- construcción de la UI ----------
 
@@ -156,12 +158,33 @@ class SettingsWidget(QWidget):
         self.address_input.setPlaceholderText("Provincia, cantón, distrito")
         self.activity_input = QLineEdit()
         self.activity_input.setPlaceholderText("Código de actividad económica (ej. 461201)")
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("Opcional: aparece en el ticket")
+        self.iban_input = QLineEdit()
+        self.iban_input.setPlaceholderText("Opcional: CR00 0000 0000 0000 0000 00")
+        self.sinpe_input = QLineEdit()
+        self.sinpe_input.setPlaceholderText("Opcional: 8888-8888")
+        self.logo_input = QLineEdit()
+        self.logo_input.setPlaceholderText("Opcional: PNG del encabezado del ticket")
+        logo_button = QPushButton("Elegir…")
+        logo_button.setObjectName("secondaryButton")
+        logo_button.clicked.connect(self._pick_logo)
+        logo_row = QWidget()
+        logo_layout = QHBoxLayout(logo_row)
+        logo_layout.setContentsMargins(0, 0, 0, 0)
+        logo_layout.setSpacing(8)
+        logo_layout.addWidget(self.logo_input, 1)
+        logo_layout.addWidget(logo_button)
 
         company_form.addRow(self._label("Nombre de la empresa:"), self.company_name_input)
         company_form.addRow(self._label("Cédula jurídica:"), self.company_id_input)
         company_form.addRow(self._label("Teléfono:"), self.phone_input)
         company_form.addRow(self._label("Dirección:"), self.address_input)
         company_form.addRow(self._label("Actividad económica:"), self.activity_input)
+        company_form.addRow(self._label("Correo electrónico:"), self.email_input)
+        company_form.addRow(self._label("IBAN (transferencias):"), self.iban_input)
+        company_form.addRow(self._label("SINPE Móvil:"), self.sinpe_input)
+        company_form.addRow(self._label("Logo del ticket:"), logo_row)
         company_page_layout.addWidget(company_group)
 
         # ---------- Tarjeta 2: Promociones y descuentos ----------
@@ -302,13 +325,30 @@ class SettingsWidget(QWidget):
         for _printer in QPrinterInfo.availablePrinters():
             self.printer_combo.addItem(_printer.printerName(), _printer.printerName())
 
-        test_printer_button = QPushButton("Probar impresión")
+        self.paper_combo = NoWheelComboBox()
+        from modules.documentos.ticket import PAPER_MODES
+        for clave, etiqueta in PAPER_MODES.items():
+            self.paper_combo.addItem(etiqueta, clave)
+        self.paper_combo.setToolTip(
+            "Windows: usa el papel ya configurado en el driver.\n"
+            "Rollo continuo: elige el papel largo de 80mm.\n"
+            "Etiqueta: imprime todo el ticket en una etiqueta.")
+
+        self.print_dialog_check = QCheckBox(
+            "Mostrar menú de impresión antes de imprimir tickets de venta")
+        self.print_dialog_check.setToolTip(
+            "Si está activado, cada ticket abre el menú de Windows para "
+            "elegir la impresora o cancelar. Por defecto imprime directo.")
+
+        test_printer_button = QPushButton("Vista previa / Probar impresión")
         test_printer_button.setObjectName("primaryButton")
         test_printer_button.clicked.connect(self._test_printer)
 
         printer_hint = QLabel("Se usa al imprimir tickets de venta (térmica 80mm)")
         printer_hint.setObjectName("settingsHint")
         printer_form.addRow(self._label("Impresora de tickets:"), self.printer_combo)
+        printer_form.addRow(self._label("Papel del ticket:"), self.paper_combo)
+        printer_form.addRow("", self.print_dialog_check)
         printer_form.addRow("", test_printer_button)
         printer_form.addRow("", printer_hint)
         printer_page_layout.addWidget(printer_group)
@@ -501,7 +541,7 @@ class SettingsWidget(QWidget):
             )
             try:
                 db.execute_insert(sql, tuple(values[key] for key in values))
-                self._save_printer()
+                self._save_extras()
                 QMessageBox.information(self, "Configuración", "Configuración guardada correctamente.")
                 return
             except Exception as exc:
@@ -511,7 +551,7 @@ class SettingsWidget(QWidget):
                             "INSERT OR REPLACE INTO hacienda_config (key, value) VALUES (?, ?)",
                             (key, str(value)),
                         )
-                    self._save_printer()
+                    self._save_extras()
                     QMessageBox.information(self, "Configuración", "Configuración guardada correctamente.")
                     return
                 except Exception:
@@ -530,15 +570,67 @@ class SettingsWidget(QWidget):
         )
 
     def _save_printer(self) -> None:
-        """Guarda la impresora de tickets seleccionada en app_config."""
+        """Guarda impresora, papel y preferencia de diálogo en app_config."""
         db = self.services.get("db")
         if db is None:
             return
         try:
-            from modules.documentos.ticket import save_printer_name
+            from modules.documentos.ticket import (
+                save_paper_mode,
+                save_printer_name,
+                save_show_dialog,
+            )
             save_printer_name(db, self.printer_combo.currentData() or "")
+            save_paper_mode(db, self.paper_combo.currentData() or "")
+            save_show_dialog(db, self.print_dialog_check.isChecked())
         except Exception:
             pass
+
+    def _save_extras(self) -> None:
+        """Guarda la configuración de impresora y los extras de empresa."""
+        self._save_printer()
+        self._save_empresa_extra()
+
+    def _save_empresa_extra(self) -> None:
+        """Guarda correo, IBAN, SINPE y logo del ticket (app_config)."""
+        db = self.services.get("db")
+        if db is None:
+            return
+        try:
+            from modules.documentos.xml_factura import guardar_empresa_extra
+
+            guardar_empresa_extra(
+                db,
+                email=self.email_input.text().strip(),
+                iban=self.iban_input.text().strip(),
+                sinpe=self.sinpe_input.text().strip(),
+                logo=self.logo_input.text().strip())
+        except Exception:
+            pass
+
+    def _load_empresa_extra(self) -> None:
+        """Carga correo, IBAN, SINPE y logo desde app_config."""
+        db = self.services.get("db")
+        if db is None:
+            return
+        try:
+            from modules.documentos.xml_factura import cargar_empresa
+
+            datos = cargar_empresa(db)
+            self.email_input.setText(datos.get("email", ""))
+            self.iban_input.setText(datos.get("iban", ""))
+            self.sinpe_input.setText(datos.get("sinpe", ""))
+            self.logo_input.setText(datos.get("logo", ""))
+        except Exception:
+            pass
+
+    def _pick_logo(self) -> None:
+        """Elige el PNG del encabezado del ticket."""
+        ruta, _ = QFileDialog.getOpenFileName(
+            self, "Logo del ticket", "",
+            "Imágenes (*.png *.jpg *.jpeg);;Todos los archivos (*)")
+        if ruta:
+            self.logo_input.setText(ruta)
 
     def _test_connection(self) -> None:
         QMessageBox.information(self, "Prueba de conexión", "Verificando conexión con Hacienda…")
@@ -719,32 +811,53 @@ class SettingsWidget(QWidget):
                 )
 
     def _load_printer(self) -> None:
-        """Carga la impresora de tickets guardada en la base de datos."""
+        """Carga impresora, papel y preferencia de diálogo de la base."""
         db = self.services.get("db")
         if db is None:
             return
         try:
-            from modules.documentos.ticket import get_printer_name
+            from modules.documentos.ticket import (
+                get_paper_mode,
+                get_printer_name,
+                get_show_dialog,
+            )
             name = get_printer_name(db)
             index = self.printer_combo.findData(name)
             if index >= 0:
                 self.printer_combo.setCurrentIndex(index)
+            index = self.paper_combo.findData(get_paper_mode(db))
+            if index >= 0:
+                self.paper_combo.setCurrentIndex(index)
+            self.print_dialog_check.setChecked(get_show_dialog(db))
         except Exception:
             pass
 
     def _test_printer(self) -> None:
-        """Imprime un ticket de prueba en la impresora seleccionada."""
-        from modules.documentos.ticket import imprimir_prueba
+        """Abre la vista previa del ticket de prueba (imprimir o cerrar)."""
+        from modules.documentos.ticket import (
+            get_paper_mode,
+            previsualizar_ticket,
+            ticket_prueba_html,
+        )
         printer_name = self.printer_combo.currentData() or ""
-        if imprimir_prueba(printer_name):
-            QMessageBox.information(
-                self, "Impresora",
-                "Ticket de prueba enviado a la impresora.")
-        else:
+        db = self.services.get("db")
+        modo = self.paper_combo.currentData() or (
+            get_paper_mode(db) if db is not None else "")
+        nombre_papel = self.paper_combo.currentText()
+        etiqueta = (f"Impresora: {printer_name or 'Predeterminada de Windows'}"
+                    f" | Papel: {nombre_papel}")
+        try:
+            ok = previsualizar_ticket(ticket_prueba_html(etiqueta), printer_name,
+                                      modo, parent=self)
+        except Exception as exc:
+            QMessageBox.warning(self, "Impresora",
+                                f"No se pudo abrir la vista previa:\n{exc}")
+            return
+        if not ok:
             QMessageBox.warning(
                 self, "Impresora",
-                "No se pudo imprimir.\nVerifique que la impresora esté encendida, "
-                "conectada y no sea un PDF/XPS.")
+                "No se pudo preparar la impresora.\nVerifique que esté "
+                "encendida, conectada y no sea un PDF/XPS.")
 
     # ---------- documentos ----------
 

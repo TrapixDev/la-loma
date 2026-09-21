@@ -819,11 +819,8 @@ class POSWidget(QWidget):
 
         if print_requested:
             try:
-                if printer_name:
-                    from modules.documentos.ticket import imprimir_ticket, ticket_html
-                    ok = imprimir_ticket(ticket_html(saved, company), printer_name)
-                else:
-                    ok = imprimir_ticket_venta(saved, company, self.services["db"])
+                ok = imprimir_ticket_venta(saved, company, self.services["db"],
+                                           printer_name=printer_name)
             except Exception:
                 ok = False
             if not ok:

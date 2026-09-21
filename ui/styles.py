@@ -202,6 +202,46 @@ QLabel#chipOrder {
     font-size: 13px;
 }
 
+/* Visor de vista previa del ticket (estilo Chrome) */
+QWidget#previewFondo {
+    background-color: #0e1116;
+}
+
+QLabel#previewHoja {
+    background-color: #ffffff;
+    border: 1px solid #2a2f3a;
+}
+
+QWidget#previewPanel {
+    background-color: #14161c;
+    border-left: 1px solid #2a2f3a;
+}
+
+QLabel#previewTitulo {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+QLabel#previewEtiqueta {
+    color: #8b93a3;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QLabel#previewZoom {
+    color: #d3dae5;
+}
+
+QLabel#previewAviso {
+    background-color: rgba(245, 158, 11, 0.14);
+    color: #f5b23c;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 12px;
+}
+
 QPushButton#paymentButton {
     background-color: #1f2530;
     color: #b9c2cf;

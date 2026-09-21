@@ -1,9 +1,9 @@
-INSTRUCCIONES - POS La Loma 1.0.1
+INSTRUCCIONES - POS La Loma 1.0.2
 =================================
 
 Instalación en la PC del negocio (1 vez)
 ----------------------------------------
-1. Copie PosLaLoma_Setup_1.0.1.exe en la PC (por USB o red).
+1. Copie PosLaLoma_Setup_1.0.2.exe en la PC (por USB o red).
 2. Doble clic y Siguiente/Siguiente/Finalizar. No pide permisos de
    administrador. Se crean accesos directos en Escritorio e Inicio.
 3. Al abrir el programa por primera vez pide crear el PIN de acceso
@@ -72,8 +72,11 @@ Configurar cada caja (las demás PCs)
    docs_path = \\192.168.1.10\documentos
 
 3. Abra el POS: pide el PIN (el mismo creado en el servidor).
-4. En Configuración > Impresora de tickets: elija la impresora térmica
-   de esa caja y pruébela.
+4. En Configuración > Impresora y docs: elija la impresora térmica y el
+   papel del ticket (Windows / Rollo continuo 80 mm / Etiqueta) y use
+   "Vista previa / Probar impresión" para ver el ticket antes de gastar
+   papel (desde la vista previa se imprime o se cierra sin imprimir).
+   Deje "Mostrar menú de impresión" desactivado para la caja diaria.
 5. En Configuración > Documentos: "Probar carpeta" para confirmar que la
    carpeta compartida responde. Si no, guarda en Documentos\PosLaLoma.
 
@@ -111,10 +114,11 @@ Seguridad
 - Permisos: la carpeta %APPDATA%\PosLaLoma queda con ACLs que solo
   permiten el acceso al usuario de Windows que usa el POS, SYSTEM y los
   Administradores (se aplica solo al abrir el programa).
-- Firewall: ejecute build\firewall_pos.ps1 como administrador en la PC
-  servidor para aceptar el puerto solo desde la red local
-  (remoteip=LocalSubnet). NO exponga el puerto a Internet; si necesita
-  acceso remoto use una VPN.
+- Firewall (solo la PC servidor): ejecute como administrador el script
+  herramientas\firewall_pos.ps1 que queda junto al programa instalado
+  (%LOCALAPPDATA%\Programs\PosLaLoma\herramientas), para aceptar el puerto
+  solo desde la red local (remoteip=LocalSubnet). NO exponga el puerto a
+  Internet; si necesita acceso remoto use una VPN.
 - El servidor solo acepta conexiones de redes privadas (10.x, 172.16-31.x,
   192.168.x, localhost). Se puede desactivar con lan_only = 0 en config.ini
   (no recomendado).

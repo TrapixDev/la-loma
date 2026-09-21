@@ -25,12 +25,16 @@ def test_enter_insuficiente_switch_mixto():
     assert dlg.method == "Mixto", f"debe pasar a Mixto, quedo en {dlg.method}"
     assert dlg.pages.currentIndex() == 1, "debe mostrar la pagina Mixto"
     assert dlg._parse_amount(dlg.mix_amount_a.text()) == 55000.0, "efectivo conservado"
-    assert dlg._parse_amount(dlg.mix_amount_b.text()) == FALTANTE, \
-        f"faltante pre-llenado: {dlg.mix_amount_b.text()}"
-    assert dlg.cobrar_btn.isEnabled(), "con el faltante puesto, COBRAR se habilita"
-    assert "Faltan" in dlg.mix_status_label.text() and "114,500" in dlg.mix_status_label.text(), \
-        dlg.mix_status_label.text()
-    print("[OK] Enter con efectivo insuficiente -> Mixto con faltante pre-llenado")
+    assert dlg.mix_amount_b.text().strip() == "", \
+        f"el segundo metodo debe quedar vacio: {dlg.mix_amount_b.text()!r}"
+    assert not dlg.cobrar_btn.isEnabled(), \
+        "sin cubrir el total, COBRAR queda deshabilitado (anti-misclick)"
+    texto = dlg.mix_status_label.text()
+    assert "Faltan" in texto and "114,500" in texto and "ingréselos" in texto, texto
+    assert "se colocaron" not in texto, texto
+    dlg.mix_amount_b.setText(f"{FALTANTE:,.2f}")
+    assert dlg.cobrar_btn.isEnabled(), "al escribir el faltante se habilita COBRAR"
+    print("[OK] Enter con efectivo insuficiente -> Mixto con segundo metodo vacio")
 
 
 def test_enter_suficiente_cobra_normal():
@@ -65,8 +69,9 @@ def test_tarjeta_insuficiente_cambia_mixto():
     assert dlg.mix_method_a.currentText() == "Tarjeta", \
         f"metodo A debe ser Tarjeta, es {dlg.mix_method_a.currentText()}"
     assert dlg._parse_amount(dlg.mix_amount_a.text()) == 50000.0, "monto de Tarjeta conservado"
-    assert dlg._parse_amount(dlg.mix_amount_b.text()) == 119500.0, \
-        f"faltante pre-llenado: {dlg.mix_amount_b.text()}"
+    assert dlg.mix_amount_b.text().strip() == "", \
+        f"el segundo metodo debe quedar vacio: {dlg.mix_amount_b.text()!r}"
+    assert not dlg.cobrar_btn.isEnabled()
     print("[OK] Tarjeta insuficiente pasa a Mixto con Tarjeta como metodo A")
 
 
@@ -75,6 +80,7 @@ def test_switch_mixto_y_enter_cobra():
     dlg.cash_input.setText("55000")
     dlg.cash_input.returnPressed.emit()
     dlg.mix_method_b.setCurrentText("Sinpe")
+    dlg.mix_amount_b.setText(f"{FALTANTE:,.2f}")
     dlg.mix_amount_b.returnPressed.emit()
     res = dlg.result()
     assert res["method"] == "Mixto"
@@ -84,7 +90,7 @@ def test_switch_mixto_y_enter_cobra():
     ], res["payment_details"]
     assert res["cash_received"] == 55000.0
     assert res["change"] == 0.0
-    print("[OK] Mixto automatico -> elegir Sinpe + Enter -> cobra completo")
+    print("[OK] Mixto: elegir Sinpe + escribir faltante + Enter -> cobra completo")
 
 
 def test_switch_mixto_respecta_moneda_usd():
@@ -94,11 +100,13 @@ def test_switch_mixto_respecta_moneda_usd():
     dlg.cash_input.setText("100")
     dlg.cash_input.returnPressed.emit()
     assert dlg.method == "Mixto"
+    assert dlg.mix_amount_b.text().strip() == "", "USD: el segundo metodo queda vacio"
     missing = round(total_usd - 100.0, 2)
+    dlg.mix_amount_b.setText(f"{missing:,.2f}")
     assert abs(dlg._parse_amount(dlg.mix_amount_b.text()) - missing) < 0.01, \
         f"faltante en USD: {dlg.mix_amount_b.text()} (esperado {missing})"
     assert dlg.cobrar_btn.isEnabled()
-    print(f"[OK] Mixto automatico respeta moneda USD (faltante {missing})")
+    print(f"[OK] Mixto en USD: segundo metodo vacio y faltante {missing}")
 
 
 if __name__ == "__main__":

@@ -43,7 +43,8 @@ def _ejecutar_icacls(args: list[str]) -> bool:
     try:
         result = subprocess.run(
             ["icacls", *args], capture_output=True, text=True,
-            timeout=_TIMEOUT)
+            timeout=_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
@@ -98,13 +99,16 @@ def carpetas_de_datos() -> list[Path]:
 
 
 def endurecer_datos() -> int:
-    """Aplica el endurecimiento a las carpetas locales. Devuelve cuántas aplicó."""
-    aplicadas = 0
-    for carpeta in carpetas_de_datos():
-        try:
-            carpeta.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            continue
-        if endurecer_carpeta(carpeta):
-            aplicadas += 1
-    return aplicadas
+    """Endurece la carpeta raíz de datos (los hijos heredan los permisos).
+
+    Una sola llamada a icacls alcanza: el permiso se otorga con (OI)(CI), así
+    que data, backups, fotos y updates quedan cubiertos por herencia.
+    """
+    from config import appdata_dir
+
+    raiz = appdata_dir()
+    try:
+        raiz.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return 0
+    return 1 if endurecer_carpeta(raiz) else 0

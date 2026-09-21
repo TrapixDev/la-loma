@@ -20,11 +20,13 @@ def setup_function():
 
 from utils.diagnostico import (
     LOG_MAX_BYTES,
+    _seguridad_check,
     configurar_logs,
     hay_problemas,
     recolectar,
     texto_reporte,
 )
+from config import Config
 
 
 def test_configurar_logs_crea_y_rota():
@@ -80,3 +82,45 @@ def test_puerto_ocupado_por_ajeno():
     finally:
         server.close()
     print("[OK] detecta puerto ocupado por otro programa")
+
+
+def _titulos() -> set:
+    return {c["titulo"] for c in recolectar(base=TMP,
+                                            db_path=str(TMP / "no_existe.db"))}
+
+
+def test_firewall_solo_en_pc_servidor():
+    original = Config.SERVER_URL
+    try:
+        Config.SERVER_URL = "http://192.168.1.10:8000"
+        assert "Firewall" not in _titulos(), "La caja no debe ver el firewall"
+        Config.SERVER_URL = "http://127.0.0.1:8000"
+        if sys.platform == "win32":
+            assert "Firewall" in _titulos(), "El servidor sí debe verlo"
+    finally:
+        Config.SERVER_URL = original
+    print("[OK] firewall solo se chequea en la PC servidor")
+
+
+def test_seguridad_mensaje_por_rol():
+    original = Config.SERVER_URL
+    try:
+        Config.SERVER_URL = "https://192.168.1.10:8000"
+        caja_https = _seguridad_check()
+        assert caja_https["nivel"] == "ok", caja_https
+        assert "cifrada" in caja_https["detalle"].lower()
+
+        Config.SERVER_URL = "http://192.168.1.10:8000"
+        caja_http = _seguridad_check()
+        assert caja_http["nivel"] == "aviso", caja_http
+
+        Config.SERVER_URL = "http://127.0.0.1:8000"
+        servidor = _seguridad_check()
+        assert servidor["nivel"] in ("ok", "aviso"), servidor
+
+        for check in (caja_https, caja_http, servidor):
+            detalle = check["detalle"].lower()
+            assert "tools" not in detalle and "python" not in detalle, check
+    finally:
+        Config.SERVER_URL = original
+    print("[OK] mensajes de seguridad según rol (sin rutas de desarrollo)")

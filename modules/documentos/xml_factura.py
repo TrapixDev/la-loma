@@ -1,10 +1,37 @@
 """Construcción del payload de factura y del XML FEAT v4.3 de respaldo."""
 
+import sys
 from datetime import datetime
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 NS = "http://tribunet.hacienda.gob.cr/docs/esquemas/2017/v4.3/facturaElectronica"
 ROOT_TAG = "{http://tribunet.hacienda.gob.cr/docs/esquemas/2017/v4.3/facturaElectronica}FacturaElectronica"
+
+# Campos extra del ticket (se guardan en app_config, no en hacienda_config).
+EXTRAS_EMPRESA = {
+    "email": "company_email",
+    "iban": "company_iban",
+    "sinpe": "company_sinpe",
+    "logo": "company_logo",
+}
+
+
+def _raiz_app() -> Path:
+    """Carpeta del .exe instalado o de la raíz del proyecto en modo fuente."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def logo_por_defecto() -> Path:
+    """Logo del ticket: el PNG de la raíz (o junto al .exe)."""
+    raiz = _raiz_app()
+    for nombre in ("logo-colegio.png", "logo.png"):
+        ruta = raiz / nombre
+        if ruta.is_file():
+            return ruta
+    return raiz / "logo-colegio.png"
 
 
 def _fmt(value) -> str:
@@ -19,7 +46,7 @@ def _fmt(value) -> str:
 
 
 def cargar_empresa(db) -> dict:
-    """Datos de la empresa emisora desde la tabla hacienda_config."""
+    """Datos de la empresa emisora (hacienda_config + extras para el ticket)."""
     config: dict = {}
     if db is None:
         return config
@@ -27,7 +54,7 @@ def cargar_empresa(db) -> dict:
         rows = db.execute_query("SELECT * FROM hacienda_config WHERE id = 1") or []
         if rows:
             row = {str(key): value for key, value in rows[0].items()}
-            return {
+            config = {
                 "company_name": row.get("company_name", ""),
                 "company_id": row.get("company_id", ""),
                 "phone": row.get("company_phone", ""),
@@ -36,14 +63,43 @@ def cargar_empresa(db) -> dict:
                 "branch": row.get("branch", "001"),
                 "terminal": row.get("terminal", "001"),
             }
-        try:
+        else:
             for row in db.execute_query("SELECT key, value FROM hacienda_config"):
                 config[str(row["key"])] = row["value"]
-        except Exception:
-            pass
     except Exception:
         pass
+    try:
+        for clave, key in EXTRAS_EMPRESA.items():
+            filas = db.execute_query(
+                "SELECT value FROM app_config WHERE key = ?", (key,))
+            if filas and str(filas[0]["value"] or "").strip():
+                config[clave] = str(filas[0]["value"]).strip()
+    except Exception:
+        pass
+    if not config.get("logo"):
+        ruta_logo = logo_por_defecto()
+        if ruta_logo.is_file():
+            config["logo"] = str(ruta_logo)
     return config
+
+
+def guardar_empresa_extra(db, email: str = "", iban: str = "",
+                          sinpe: str = "", logo: str = "") -> None:
+    """Guarda correo, IBAN, SINPE y logo del ticket en app_config.
+
+    Los campos vacíos se guardan vacíos: el ticket los omite.
+    """
+    valores = {
+        "company_email": email, "company_iban": iban,
+        "company_sinpe": sinpe, "company_logo": logo,
+    }
+    for key, value in valores.items():
+        try:
+            db.execute_update(
+                "INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+                (key, str(value or "").strip()))
+        except Exception:
+            pass
 
 
 def _item_attr(item, name, default=""):

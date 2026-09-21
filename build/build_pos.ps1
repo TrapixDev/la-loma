@@ -2,13 +2,13 @@
 # Requiere:  python -m pip install -r requirements.txt pyinstaller
 #            Inno Setup 6 (ISCC.exe) en %ProgramFiles(x86)%\Inno Setup 6
 # Uso:       powershell -ExecutionPolicy Bypass -File build\build_pos.ps1
-# Salida:    dist\PosLaLoma_Setup_1.0.1.exe
+# Salida:    dist\PosLaLoma_Setup_1.0.2.exe
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$Version = "1.0.1"
+$Version = "1.0.2"
 $Name = "PosLaLoma"
 $Assets = Join-Path $Root "build\assets"
 $Icon = Join-Path $Assets "icon.ico"
@@ -43,6 +43,17 @@ python -m PyInstaller --clean --noconfirm `
     --paths $Root `
     main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller falló." }
+
+# ---------- 2b) Herramientas que viajan en el instalador ----------
+$Herramientas = Join-Path $Root "dist\$Name\herramientas"
+New-Item -ItemType Directory -Path $Herramientas -Force | Out-Null
+Copy-Item (Join-Path $Root "build\firewall_pos.ps1") $Herramientas -Force
+
+# El logo del ticket viaja junto al .exe (el POS lo usa en el encabezado).
+$Logo = Join-Path $Root "logo-colegio.png"
+if (Test-Path $Logo) {
+    Copy-Item $Logo (Join-Path $Root "dist\$Name") -Force
+}
 
 # ---------- 3) Inno Setup ----------
 Write-Host "== Inno Setup =="

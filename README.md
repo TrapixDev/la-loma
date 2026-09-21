@@ -1,4 +1,4 @@
-# POS La Loma 1.0.1
+# POS La Loma 1.0.2
 
 Punto de venta para Mueblería y Aserradero La Loma (negocio pequeño).
 Python + PyQt6, base SQLite, servidor local para varias cajas (LAN).
@@ -20,7 +20,7 @@ Python + PyQt6, base SQLite, servidor local para varias cajas (LAN).
 
 ## Instalación (PC del negocio)
 
-1. Ejecute `PosLaLoma_Setup_1.0.1.exe` (Siguiente/Siguiente/Finalizar).
+1. Ejecute `PosLaLoma_Setup_1.0.2.exe` (Siguiente/Siguiente/Finalizar).
    Instala por usuario, sin permisos de administrador.
 2. Siga `INSTRUCCIONES.txt` (carpeta compartida, IP fija, firewall, cajas).
 
@@ -86,7 +86,8 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
   guardan cifrados con la DPAPI de Windows (nunca en texto plano).
 - **Permisos restringidos**: `%APPDATA%\PosLaLoma` queda con ACLs que solo
   permiten acceso al usuario que ejecuta el POS, SYSTEM y Administradores.
-- **Firewall**: ejecute `build\firewall_pos.ps1` como administrador para
+- **Firewall**: en la PC servidor ejecute como administrador
+  `herramientas\firewall_pos.ps1` (queda junto al programa instalado) para
   aceptar conexiones al puerto solo desde la red local (`remoteip=LocalSubnet`).
 - **Solo redes privadas**: el servidor rechaza peticiones desde IP públicas
   (`lan_only = 0` en config.ini lo desactiva, no recomendado).
@@ -108,6 +109,17 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
 
 ## Versiones
 
+- 1.0.2 — cobro: al presionar Enter con un monto insuficiente, el segundo
+  método del pago mixto queda **vacío** (COBRAR deshabilitado hasta cubrir el
+  total) para evitar cobros por error; el autocompletado sigue disponible en el
+  botón "Completar falta con el otro método". Tickets: **formato tipo factura
+  electrónica** (logo, encabezado
+  centrado, tabla CANT/DETALLE/PRECIO/SUBTOT/IVA, totales, "SON" en letras,
+  IBAN/SINPE y marca de REIMPRESIÓN), **visor de vista previa estilo Chrome**
+  (hoja + panel con Destino/Copias/Papel e Imprimir/Cancelar) y selector de
+  **papel del ticket** (Windows / rollo continuo 80 mm / etiqueta) que corrige
+  el caso de etiquetas imprimiendo una línea por etiqueta. Diagnóstico por rol
+  y arranque sin destellos de consola (icacls/netsh ocultos).
 - 1.0.1 — seguridad: credenciales cifradas con DPAPI, ACLs restringidas en
   `%APPDATA%\PosLaLoma`, servidor solo para redes privadas con límites de
   entrada, HTTPS opcional, firewall acotado a la red local y actualizaciones

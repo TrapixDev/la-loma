@@ -39,7 +39,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 
 

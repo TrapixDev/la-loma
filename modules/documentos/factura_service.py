@@ -68,7 +68,8 @@ def reimprimir_factura(db, cart_service, sale_id: int, imprimir: bool = True) ->
     if imprimir and resultado["pdf"]:
         try:
             from .ticket import imprimir_ticket_venta
-            if not imprimir_ticket_venta(sale, company, db):
+            if not imprimir_ticket_venta(sale, company, db,
+                                         es_reimpresion=True):
                 _pdf.imprimir_factura(resultado["html"])
         except Exception:
             _pdf.imprimir_factura(resultado["html"])

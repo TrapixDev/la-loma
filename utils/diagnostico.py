@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from config import Config, IS_FROZEN, appdata_dir
 
@@ -194,39 +195,66 @@ def _log_check() -> dict:
                   f"Los errores se guardan en {log_path()}")
 
 
+def _es_pc_servidor() -> bool:
+    """True si esta PC es la que guarda la base (SERVER_URL local)."""
+    try:
+        host = (urlparse(Config.SERVER_URL).hostname or "").lower()
+    except ValueError:
+        host = ""
+    return host in ("", "127.0.0.1", "localhost", "::1")
+
+
+def _ruta_script_firewall() -> Path:
+    """Ruta del script de firewall (instalado en herramientas o en build)."""
+    if IS_FROZEN:
+        return (Path(sys.executable).resolve().parent / "herramientas"
+                / "firewall_pos.ps1")
+    return Path(__file__).resolve().parents[1] / "build" / "firewall_pos.ps1"
+
+
 def _seguridad_check() -> dict:
-    """Cifrado del tráfico (HTTPS) y permisos de las carpetas de datos."""
+    """Cifrado del tráfico (HTTPS) según el rol de la PC."""
     from utils import seguridad
 
     acl = ("ACLs restringidas al usuario actual" if seguridad.disponible()
            else "ACLs no aplicables (fuera de Windows)")
-    certificado = Path(Config.TLS_CERT) if Config.TLS_CERT else None
-    if certificado and certificado.is_file():
+    if _es_pc_servidor():
+        certificado = Path(Config.TLS_CERT) if Config.TLS_CERT else None
+        if certificado and certificado.is_file():
+            return _check(NIVEL_OK, "Seguridad",
+                          f"HTTPS activo ({certificado.name}); {acl}")
+        return _check(NIVEL_AVISO, "Seguridad",
+                      "El servidor comparte datos sin cifrar (HTTP) dentro de "
+                      "la red local. Es normal en la red del negocio; no "
+                      "exponga el puerto a Internet.")
+    if str(Config.SERVER_URL).lower().startswith("https://"):
         return _check(NIVEL_OK, "Seguridad",
-                      f"HTTPS activo ({certificado.name}); {acl}")
+                      "Conexión cifrada (HTTPS) con el servidor")
     return _check(NIVEL_AVISO, "Seguridad",
-                  "El servidor usa HTTP dentro de la red local (no lo exponga a "
-                  "Internet). Para cifrar el tráfico: "
-                  "python tools/generar_certificado.py")
+                  "La conexión con el servidor va sin cifrar (HTTP) dentro de "
+                  "la red local. Es normal en la red del negocio; no exponga "
+                  "el puerto a Internet.")
 
 
 def _firewall_check() -> dict | None:
-    """Comprueba si existe la regla de firewall del POS (solo Windows)."""
-    if sys.platform != "win32":
+    """Regla de firewall: solo aplica a la PC servidor (Windows)."""
+    if sys.platform != "win32" or not _es_pc_servidor():
         return None
     try:
         result = subprocess.run(
             ["netsh", "advfirewall", "firewall", "show", "rule",
              "name=POS La Loma"],
-            capture_output=True, text=True, timeout=15)
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode == 0 and "POS La Loma" in result.stdout:
         return _check(NIVEL_OK, "Firewall",
-                      "Regla 'POS La Loma' configurada para la red local")
+                      "Regla 'POS La Loma' configurada (solo red local)")
     return _check(NIVEL_AVISO, "Firewall",
-                  "Sin regla 'POS La Loma'. Ejecute build\\firewall_pos.ps1 "
-                  "como administrador para permitir solo la red local")
+                  "Falta permitir el POS en el firewall de Windows (solo red "
+                  "local). Ejecute como administrador: "
+                  f"{_ruta_script_firewall()}")
 
 
 def recolectar(base: Path | None = None, db_path: str | None = None,

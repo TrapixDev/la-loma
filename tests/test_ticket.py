@@ -81,7 +81,9 @@ def test_ticket_contiene_datos():
           and "V-00001" in html
           and "Mesa de roble" in html
           and "150,000" in html
-          and "GRACIAS POR SU COMPRA" in html)
+          and "GRACIAS POR SU PREFERENCIA" in html
+          and "CANT" in html and "DETALLE" in html and "SUBTOT" in html
+          and "SON:" in html)
     print(f"[{'OK' if ok else 'FAIL'}] ticket contiene empresa, factura, items y pie")
     assert ok
 
@@ -102,7 +104,7 @@ def test_ticket_usd_equivalente_crc():
         Config.MOSTRAR_EQUIVALENTE_CRC = True
         sale = make_sale(currency="USD", rate=520.0)
         html = ticket_html(sale, COMPANY)
-        ok = "Equiv. CRC" in html and "₡169,500.00" in html
+        ok = "Equivalente CRC" in html and "₡169,500.00" in html
         print(f"[{'OK' if ok else 'FAIL'}] ticket USD muestra equivalente en colones")
         assert ok
     finally:
@@ -112,7 +114,8 @@ def test_ticket_usd_equivalente_crc():
 def test_ticket_simplificada_sin_cliente():
     sale = make_sale(invoice_type="simplificada")
     html = ticket_html(sale, COMPANY)
-    ok = "FACTURA SIMPLIFICADA" in html and "Cliente:" not in html
+    ok = ("TIQUETE ELECTRÓNICO" in html and "Cliente General" in html
+          and "CLAVE:" not in html)
     print(f"[{'OK' if ok else 'FAIL'}] ticket simplificada: titulo, sin cliente")
     assert ok
 
@@ -120,7 +123,7 @@ def test_ticket_simplificada_sin_cliente():
 def test_ticket_clave_hacienda():
     sale = make_sale(clave="123456789012345678901234567890123456789012345678901")
     html = ticket_html(sale, COMPANY)
-    ok = "Clave:" in html and "1234567890123" in html
+    ok = "CLAVE:" in html and "1234567890123" in html
     print(f"[{'OK' if ok else 'FAIL'}] ticket incluye clave de Hacienda")
     assert ok
 

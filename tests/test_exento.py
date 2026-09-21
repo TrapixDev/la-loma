@@ -93,9 +93,9 @@ def test_pdf_general_mantiene_iva():
 
 def test_ticket_simplificada_exenta():
     html = ticket_html(make_sale(), COMPANY)
-    ok = ("Exento de IVA" in html
-          and "Impuesto" not in html
-          and "FACTURA SIMPLIFICADA" in html)
+    ok = ("EXENTO DE IVA" in html
+          and "IMPUESTOS/IVA" not in html
+          and "TIQUETE ELECTRÓNICO" in html)
     print(f"[{'OK' if ok else 'FAIL'}] ticket simplificada muestra 'Exento de IVA'")
     assert ok
 
@@ -103,7 +103,7 @@ def test_ticket_simplificada_exenta():
 def test_ticket_general_mantiene_iva():
     html = ticket_html(make_sale(invoice_type="general", subtotal=100000.0,
                                  total=113000.0, tax=13000.0), COMPANY)
-    ok = "Impuesto" in html and "Exento de IVA" not in html
+    ok = "IMPUESTOS/IVA" in html and "EXENTO DE IVA" not in html
     print(f"[{'OK' if ok else 'FAIL'}] ticket general mantiene IVA")
     assert ok
 

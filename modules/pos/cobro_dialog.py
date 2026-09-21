@@ -636,8 +636,12 @@ class CobroDialog(QDialog):
         self.mix_method_b.blockSignals(False)
 
     def _switch_to_mixto(self) -> None:
-        """Pasa a la página Mixto con el monto ingresado del método actual y
-        el faltante pre-llenado en otro método."""
+        """Pasa a la página Mixto con el monto ingresado del método actual.
+
+        El segundo método queda vacío a propósito (para que nadie cobre de más
+        por un Enter de más); el faltante solo se muestra en el mensaje. Si se
+        quiere autocompletar, está el botón "Completar falta con el otro método".
+        """
         if self.method not in ("Efectivo", "Tarjeta", "Sinpe"):
             return
         cash = self._parse_cash()
@@ -648,7 +652,6 @@ class CobroDialog(QDialog):
             return
         # Método actual -> A; elige otro distinto para B.
         origin_method = self.method
-        others = [m for m in ("Efectivo", "Tarjeta", "Sinpe") if m != origin_method]
         self.method = "Mixto"
         self.method_buttons["Mixto"].setChecked(True)
         self.pages.setCurrentIndex(1)
@@ -657,11 +660,11 @@ class CobroDialog(QDialog):
         self.mix_method_a.blockSignals(False)
         self._update_mix_method_b()
         self.mix_amount_a.setText(f"{cash:,.2f}")
-        self.mix_amount_b.setText(f"{missing:,.2f}")
+        self.mix_amount_b.clear()
         self._update_change()
         self.mix_status_label.setText(
-            f"Faltan {format_currency(missing, self.currency)} - se colocaron en "
-            f"{self.mix_method_b.currentText()}. Confirme y presione COBRAR.")
+            f"Faltan {format_currency(missing, self.currency)} · ingréselos en "
+            f"{self.mix_method_b.currentText()} y presione COBRAR.")
         self.mix_method_b.setFocus()
 
     def _on_cobrar(self) -> None:

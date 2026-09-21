@@ -69,6 +69,20 @@ def _instalar_hooks() -> None:
         args.exc_type, args.exc_value, args.exc_traceback)
 
 
+def _cargar_traductor_es(app) -> None:
+    """Traduce los diálogos estándar de Qt (Imprimir/Cancelar, etc.) al español."""
+    try:
+        from PyQt6.QtCore import QLibraryInfo, QLocale, QTranslator
+
+        ruta = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        traductor = QTranslator(app)
+        if traductor.load(QLocale("es"), "qtbase", "_", ruta):
+            app.installTranslator(traductor)
+            app._traductor_es = traductor
+    except Exception:
+        pass
+
+
 def _diagnostico_primera_vez() -> None:
     """Avisa solo si hay problemas de instalación (una vez por equipo)."""
     from utils.diagnostico import (
@@ -471,8 +485,12 @@ def _main() -> int:
     app.setStyle("Fusion")
     app.setApplicationName("POS - La Loma")
     app.setStyleSheet(QSS_MAIN)
+    _cargar_traductor_es(app)
 
-    _diagnostico_primera_vez()
+    # El diagnóstico de primera vez corre ya con la ventana en pantalla: no
+    # bloquea el arranque ni destella consolas (icacls/netsh van sin ventana).
+    from PyQt6.QtCore import QTimer
+    QTimer.singleShot(300, _diagnostico_primera_vez)
 
     if Config.MODE == "server":
         url = Config.SERVER_URL
