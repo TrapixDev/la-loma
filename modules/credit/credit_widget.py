@@ -772,7 +772,15 @@ class CreditDetailDialog(QDialog):
             QMessageBox.StandardButton.No,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            reimprimir_factura(db, cart_svc, account.sale_id, imprimir=True)
+            resultado = reimprimir_factura(db, cart_svc, account.sale_id,
+                                           imprimir=True)
+            if resultado and not resultado.get("impreso"):
+                QMessageBox.information(
+                    self, "Reimprimir",
+                    "No se pudo imprimir en la impresora térmica ni en una de "
+                    "hojas.\nLa factura quedó guardada en:\n"
+                    f"{resultado.get('pdf')}\n\nPara imprimirla, elija una "
+                    "impresora A4 en Configuración → Impresora y docs.")
 
 
 class CreditSaleDialog(QDialog):

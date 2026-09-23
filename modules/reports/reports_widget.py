@@ -711,8 +711,16 @@ class ReportsWidget(QWidget):
         if not resultado or not resultado.get("pdf"):
             QMessageBox.warning(self, "Reimprimir", "No se encontró el documento de esa venta.")
             return
-        QMessageBox.information(self, "Reimprimir",
-                                f"Factura reimpresa y guardada en:\n{resultado.get('pdf')}")
+        if resultado.get("impreso"):
+            QMessageBox.information(self, "Reimprimir",
+                                    f"Factura reimpresa y guardada en:\n{resultado.get('pdf')}")
+        else:
+            QMessageBox.information(
+                self, "Reimprimir",
+                f"No se pudo imprimir en la impresora térmica ni en una de "
+                f"hojas.\nLa factura quedó guardada en:\n{resultado.get('pdf')}\n\n"
+                f"Para imprimirla, elija una impresora A4 en "
+                f"Configuración → Impresora y docs.")
 
     def _selected_sale(self) -> dict | None:
         row = self.sales_table.currentRow()

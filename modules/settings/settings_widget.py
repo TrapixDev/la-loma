@@ -340,6 +340,15 @@ class SettingsWidget(QWidget):
             "Si está activado, cada ticket abre el menú de Windows para "
             "elegir la impresora o cancelar. Por defecto imprime directo.")
 
+        self.a4_combo = NoWheelComboBox()
+        self.a4_combo.addItem("Predeterminada de Windows", "")
+        for _printer in QPrinterInfo.availablePrinters():
+            self.a4_combo.addItem(_printer.printerName(), _printer.printerName())
+        self.a4_combo.setToolTip(
+            "Impresora de hojas para la factura A4 en PDF.\n"
+            "La térmica de 80mm no imprime la A4: si no hay una impresora A4 "
+            "configurada, solo se guarda el PDF.")
+
         test_printer_button = QPushButton("Vista previa / Probar impresión")
         test_printer_button.setObjectName("primaryButton")
         test_printer_button.clicked.connect(self._test_printer)
@@ -348,6 +357,7 @@ class SettingsWidget(QWidget):
         printer_hint.setObjectName("settingsHint")
         printer_form.addRow(self._label("Impresora de tickets:"), self.printer_combo)
         printer_form.addRow(self._label("Papel del ticket:"), self.paper_combo)
+        printer_form.addRow(self._label("Impresora para facturas A4:"), self.a4_combo)
         printer_form.addRow("", self.print_dialog_check)
         printer_form.addRow("", test_printer_button)
         printer_form.addRow("", printer_hint)
@@ -575,6 +585,7 @@ class SettingsWidget(QWidget):
         if db is None:
             return
         try:
+            from modules.documentos.pdf_factura import save_a4_printer
             from modules.documentos.ticket import (
                 save_paper_mode,
                 save_printer_name,
@@ -583,6 +594,7 @@ class SettingsWidget(QWidget):
             save_printer_name(db, self.printer_combo.currentData() or "")
             save_paper_mode(db, self.paper_combo.currentData() or "")
             save_show_dialog(db, self.print_dialog_check.isChecked())
+            save_a4_printer(db, self.a4_combo.currentData() or "")
         except Exception:
             pass
 
@@ -816,6 +828,7 @@ class SettingsWidget(QWidget):
         if db is None:
             return
         try:
+            from modules.documentos.pdf_factura import get_a4_printer
             from modules.documentos.ticket import (
                 get_paper_mode,
                 get_printer_name,
@@ -829,6 +842,9 @@ class SettingsWidget(QWidget):
             if index >= 0:
                 self.paper_combo.setCurrentIndex(index)
             self.print_dialog_check.setChecked(get_show_dialog(db))
+            index = self.a4_combo.findData(get_a4_printer(db))
+            if index >= 0:
+                self.a4_combo.setCurrentIndex(index)
         except Exception:
             pass
 

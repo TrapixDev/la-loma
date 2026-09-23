@@ -10,7 +10,7 @@ import json as _json
 from pathlib import Path
 
 from PyQt6.QtCore import QMarginsF, QSizeF
-from PyQt6.QtGui import QPageLayout, QPageSize, QTextDocument
+from PyQt6.QtGui import QPageLayout, QPageSize, QPainter, QTextDocument
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 
 from config import Config
@@ -335,7 +335,8 @@ PAPER_MODES = {
     PAPER_ROLL: "Rollo continuo 80 mm",
     PAPER_LABEL: "Etiqueta (una por ticket)",
 }
-_ALTO_CONTINUO_MM = 150.0
+# Reducción mínima aceptable cuando el ticket no cabe en la página.
+_ESCALA_MINIMA = 0.6
 
 
 def elegir_papel(soportadas: list[tuple[str, float, float]], modo: str,
@@ -378,27 +379,56 @@ def _medir_alto(html: str) -> float:
         return 297.0
 
 
-def _tamanos_soportados(printer: QPrinter) -> list[tuple[str, float, float]]:
-    soportadas: list[tuple[str, float, float]] = []
+def tamanos_soportados(printer_name: str) -> list[tuple[str, float, float]]:
+    """Tamaños de papel que el driver reporta (nombre, ancho_mm, alto_mm).
+
+    OJO: en Qt6 la lista la da QPrinterInfo (QPrinter ya no tiene
+    supportedPageSizes); ese era el motivo de que el modo de papel no se
+    aplicara y el ticket se paginara con el formulario corto del driver.
+    """
+    if not printer_name:
+        return []
     try:
-        for size in printer.supportedPageSizes():
+        info = QPrinterInfo.printerInfo(printer_name)
+        if info is None or info.isNull():
+            return []
+        tamanos: list[tuple[str, float, float]] = []
+        for size in info.supportedPageSizes():
             mm = size.size(QPageSize.Unit.Millimeter)
-            soportadas.append((size.name(), mm.width(), mm.height()))
+            tamanos.append((size.name(), mm.width(), mm.height()))
+        return tamanos
     except Exception:
-        pass
-    return soportadas
+        return []
+
+
+def _tamano_que_mejor_encaja(soportadas: list[tuple[str, float, float]],
+                             alto_contenido: float,
+                             ancho_mm: float = _TICKET_WIDTH_MM) -> tuple[str, float, float] | None:
+    """El tamaño de ~80mm más chico que alcance el ticket (o el mayor si ninguno)."""
+    candidatas = [p for p in soportadas if abs(p[1] - ancho_mm) <= 5]
+    if not candidatas:
+        candidatas = list(soportadas)
+    if not candidatas:
+        return None
+    alcanzan = [p for p in candidatas if p[2] + 1 >= alto_contenido]
+    if alcanzan:
+        return min(alcanzan, key=lambda p: p[2])
+    return max(candidatas, key=lambda p: p[2])
 
 
 def _preparar_impresora(printer_name: str = "", modo: str = "",
                         html: str = "", copias: int = 1) -> QPrinter | None:
-    """Crea el QPrinter respetando el papel elegido (Windows/rollo/etiqueta).
+    """Crea el QPrinter usando SIEMPRE un tamaño soportado por el driver.
 
-    Antes se forzaba un tamaño "80 x alto" con ExactMatch: si el driver no lo
-    soportaba (p. ej. una impresora configurada con etiquetas), Windows usaba
-    su formulario por defecto y cada línea del ticket salía en una etiqueta.
-    Ahora, en modo Windows, se usa el papel del driver y solo se compacta el
-    alto cuando el papel es continuo (alto >= 150mm); con etiqueta se imprime
-    una por ticket sin paginar.
+    Reglas:
+    - rollo/etiqueta: se elige de la lista de tamaños del driver (nunca se
+      inventa un tamaño, que era lo que hacía que Windows alimentara papel
+      en blanco sin fin).
+    - rollo: el de ~80mm con mayor alto; etiqueta: el más chico que alcance.
+    - windows: respeta el papel actual y, si es más corto que el ticket,
+      salta al tamaño soportado que mejor encaje.
+    - El alto nunca se inventa: si el ticket no cabe en la página, el pintado
+      lo reduce para que entre en una sola página.
     """
     name = printer_name or QPrinterInfo.defaultPrinterName()
     if not name:
@@ -417,71 +447,124 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
 
     actual = printer.pageLayout().pageSize()
     actual_mm = actual.size(QPageSize.Unit.Millimeter)
-    ancho, alto_actual = actual_mm.width(), actual_mm.height()
-    aplicado = f"actual {ancho:.0f}x{alto_actual:.0f}mm"
+    alto_actual = actual_mm.height()
+    aplicado = f"actual {actual_mm.width():.0f}x{alto_actual:.0f}mm"
 
     alto_contenido = _medir_alto(html) if html else 0.0
+    soportadas = tamanos_soportados(name)
     elegida = None
-    if modo in (PAPER_ROLL, PAPER_LABEL):
-        elegida = elegir_papel(_tamanos_soportados(printer), modo)
+    if modo == PAPER_ROLL:
+        elegida = elegir_papel(soportadas, PAPER_ROLL)
+    elif modo == PAPER_LABEL:
+        elegida = _tamano_que_mejor_encaja(soportadas, alto_contenido)
     elif modo == PAPER_WINDOWS and html and alto_actual + 1 < alto_contenido:
-        # Papel del driver más corto que el ticket (p. ej. etiqueta 80x15):
-        # si hay un rollo de 80mm soportado, se usa para no partir el ticket.
-        rollo = elegir_papel(_tamanos_soportados(printer), PAPER_ROLL)
-        if rollo is not None and rollo[2] >= alto_contenido:
-            elegida = rollo
-            aplicado += " (papel corto: se usa rollo)"
+        # El papel del driver no alcanza (p. ej. etiqueta 80x15): se usa el
+        # tamaño soportado que mejor encaje.
+        elegida = _tamano_que_mejor_encaja(soportadas, alto_contenido)
+        if elegida is not None and elegida[2] + 1 < alto_contenido:
+            elegida = None  # ni el mayor alcanza: se reduce al imprimir
+        if elegida is not None:
+            aplicado += " (papel corto)"
     if elegida is not None:
-        ancho = elegida[1]
         printer.setPageSize(QPageSize(
             QSizeF(elegida[1], elegida[2]), QPageSize.Unit.Millimeter,
             elegida[0], QPageSize.SizeMatchPolicy.ExactMatch))
-        alto_actual = elegida[2]
         aplicado = (f"{elegida[0]} {elegida[1]:.0f}x{elegida[2]:.0f}mm"
-                    + (" (papel del driver era corto)" if "papel corto" in aplicado
-                       else ""))
-
-    continuo = alto_actual >= _ALTO_CONTINUO_MM
-    if continuo and modo in (PAPER_WINDOWS, PAPER_ROLL):
-        # Papel continuo: compactar el alto al contenido para no desperdiciar.
-        alto = alto_contenido or 297.0
-        printer.setPageSize(QPageSize(
-            QSizeF(ancho, alto), QPageSize.Unit.Millimeter,
-            "Ticket80", QPageSize.SizeMatchPolicy.ExactMatch))
-        aplicado += f" -> contenido {ancho:.0f}x{alto:.0f}mm"
+                    + (" (el papel del driver era corto)"
+                       if "papel corto" in aplicado else ""))
 
     printer.setPageMargins(
         QMarginsF(_MARGIN_MM, _MARGIN_MM, _MARGIN_MM, _MARGIN_MM),
         QPageLayout.Unit.Millimeter)
-    _log_impresora(name, actual_mm, modo, aplicado, printer)
+    _log_impresora(name, actual_mm, modo, aplicado, soportadas)
     return printer
 
 
 def _log_impresora(name: str, actual_mm, modo: str, aplicado: str,
-                   printer: QPrinter) -> None:
+                   soportadas: list[tuple[str, float, float]]) -> None:
     try:
         from utils.diagnostico import escribir_log
 
-        soportados = ", ".join(
-            f"{n} {w:.0f}x{h:.0f}" for n, w, h in _tamanos_soportados(printer)[:6])
+        lista = ", ".join(
+            f"{n} {w:.0f}x{h:.0f}" for n, w, h in soportadas[:8])
         escribir_log(
             f"Impresora '{name}': papel actual {actual_mm.width():.0f}x"
             f"{actual_mm.height():.0f}mm; modo={modo}; usado={aplicado}; "
-            f"soportados: {soportados or 'n/d'}")
+            f"soportados({len(soportadas)}): {lista or 'n/d'}")
     except Exception:
         pass
 
 
+def escala_necesaria(printer: QPrinter, html: str) -> float:
+    """Escala (<= 1.0) que necesita el ticket para caber en una página."""
+    try:
+        rect = printer.pageLayout().paintRectPixels(printer.resolution())
+        doc = _documento(html)
+        doc.setTextWidth(max(1.0, float(rect.width())))
+        alto_doc = float(doc.size().height())
+        alto_pagina = float(rect.height())
+        if alto_doc <= 0 or alto_pagina <= 0 or alto_doc <= alto_pagina:
+            return 1.0
+        return max(_ESCALA_MINIMA, alto_pagina / alto_doc)
+    except Exception:
+        return 1.0
+
+
+def _escala_para_caber(alto_pagina: float, alto_doc: float,
+                       minimo: float = _ESCALA_MINIMA) -> float:
+    """Escala pura (para tests): 1.0 si cabe, proporcional si no, con mínimo."""
+    if alto_doc <= 0 or alto_pagina <= 0 or alto_doc <= alto_pagina:
+        return 1.0
+    return max(minimo, alto_pagina / alto_doc)
+
+
+def _imprimir_una_pagina(html: str, printer: QPrinter) -> bool:
+    """Dibuja el ticket en UNA sola página.
+
+    No usa QTextDocument.print() (que pagina el contenido y era el origen de
+    las "13 páginas"): pinta el documento una vez, recortado al área imprimible
+    y reducido si no cabe. Así nunca se emite más de una página ni papel en
+    blanco sin fin.
+    """
+    try:
+        rect = printer.pageLayout().paintRectPixels(printer.resolution())
+        doc = _documento(html)
+        doc.setTextWidth(max(1.0, float(rect.width())))
+        alto_doc = float(doc.size().height())
+        escala = _escala_para_caber(float(rect.height()), alto_doc)
+        painter = QPainter(printer)
+        try:
+            painter.setClipRect(rect)
+            painter.translate(rect.left(), rect.top())
+            if escala < 1.0:
+                painter.scale(escala, escala)
+            doc.drawContents(painter)
+        finally:
+            painter.end()
+        if escala < 1.0:
+            try:
+                from utils.diagnostico import escribir_log
+                escribir_log(
+                    f"Ticket reducido al {escala * 100:.0f}% para que quepa "
+                    f"en una sola página.")
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
+
 def advertencia_papel(printer: QPrinter, html: str) -> str:
-    """Aviso si el papel configurado es más corto que el contenido del ticket."""
+    """Aviso si el ticket no cabe en el papel y se va a reducir."""
     try:
         pagina = printer.pageLayout().pageSize().size(QPageSize.Unit.Millimeter)
         alto_contenido = _medir_alto(html)
         if pagina.height() + 1 < alto_contenido:
-            return (f"El papel configurado ({pagina.width():.0f}×"
+            return (f"El papel elegido ({pagina.width():.0f}×"
                     f"{pagina.height():.0f} mm) es más corto que el ticket "
-                    f"({alto_contenido:.0f} mm). Elija «Rollo continuo 80 mm» "
-                    f"para que salga en una sola página.")
+                    f"({alto_contenido:.0f} mm): se reducirá para que entre "
+                    f"en una sola página. Para evitarlo elija «Rollo continuo "
+                    f"80 mm».")
     except Exception:
         pass
     return ""
@@ -497,8 +580,7 @@ def imprimir_ticket(html: str, printer_name: str = "", modo_papel: str = "",
     printer = _preparar_impresora(printer_name, modo_papel, html, copias)
     if printer is None:
         return False
-    _documento(html).print(printer)
-    return True
+    return _imprimir_una_pagina(html, printer)
 
 
 def imprimir_ticket_con_dialogo(html: str, printer_name: str = "",
@@ -515,8 +597,7 @@ def imprimir_ticket_con_dialogo(html: str, printer_name: str = "",
     dialog = QPrintDialog(printer)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
-    _documento(html).print(printer)
-    return True
+    return _imprimir_una_pagina(html, printer)
 
 
 def previsualizar_ticket(html: str, printer_name: str = "",

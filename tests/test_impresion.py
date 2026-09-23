@@ -210,6 +210,100 @@ def test_monto_en_letras():
     assert texto(15000, "USD") == "QUINCE MIL DÓLARES"
 
 
+def test_tamanos_soportados_api_correcta():
+    """QPrinter NO tiene supportedPageSizes en Qt6; la lista la da QPrinterInfo."""
+    from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
+
+    from modules.documentos.ticket import tamanos_soportados
+
+    assert not hasattr(QPrinter, "supportedPageSizes"), \
+        "si Qt agregara el método, revisar la implementación"
+
+    impresoras = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if not impresoras:
+        pytest.skip("No hay impresoras instaladas en esta PC")
+    tamanos = tamanos_soportados(impresoras[0])
+    assert isinstance(tamanos, list)
+    if tamanos:
+        nombre, ancho, alto = tamanos[0]
+        assert isinstance(nombre, str) and ancho >= 0 and alto >= 0
+    assert tamanos_soportados("Impresora que no existe 123") == []
+
+
+def test_escala_para_caber():
+    from modules.documentos.ticket import _escala_para_caber
+
+    assert _escala_para_caber(100.0, 80.0) == 1.0
+    assert _escala_para_caber(100.0, 0.0) == 1.0
+    assert _escala_para_caber(0.0, 80.0) == 1.0
+    assert abs(_escala_para_caber(100.0, 150.0) - (100.0 / 150.0)) < 0.001
+    assert _escala_para_caber(100.0, 1000.0) == 0.6  # nunca menor al mínimo
+
+
+def test_mejor_encaja_etiqueta():
+    from modules.documentos.ticket import _tamano_que_mejor_encaja
+
+    tamanos = [("Rollo 80x297", 80.0, 297.0), ("Etiqueta 80x40", 80.0, 40.0),
+               ("Etiqueta 80x15", 80.0, 15.0)]
+    # Ticket de 120mm: el más chico que alcanza es el rollo de 297.
+    elegido = _tamano_que_mejor_encaja(tamanos, 120.0)
+    assert elegido is not None and elegido[0] == "Rollo 80x297"
+    # Ticket de 35mm: entra en la etiqueta de 40 (menos desperdicio).
+    elegido = _tamano_que_mejor_encaja(tamanos, 35.0)
+    assert elegido is not None and elegido[0] == "Etiqueta 80x40"
+    # Ticket de 400mm: ninguno alcanza -> el mayor (y se reduce al imprimir).
+    elegido = _tamano_que_mejor_encaja(tamanos, 400.0)
+    assert elegido is not None and elegido[2] == 297.0
+
+
+def test_no_se_inventan_tamanos_de_papel():
+    """Regresión: el bug de las 13 páginas venía de un tamaño inventado."""
+    import inspect
+
+    from modules import documentos
+    from modules.documentos import ticket
+
+    fuente = inspect.getsource(ticket)
+    assert "Ticket80" not in fuente, "no se deben inventar nombres de papel"
+    assert ".print(printer)" not in fuente, \
+        "QTextDocument.print pagina el ticket; se pinta con QPainter"
+    assert "printer.supportedPageSizes" not in fuente, \
+        "supportedPageSizes es de QPrinterInfo (Qt6)"
+    assert hasattr(documentos, "imprimir_ticket")
+
+
+def test_papel_permite_a4():
+    from modules.documentos.pdf_factura import papel_permite_a4
+
+    assert papel_permite_a4(80.0, 297.0) is False, "la térmica de 80mm no imprime A4"
+    assert papel_permite_a4(80.1, 15.0) is False
+    assert papel_permite_a4(210.0, 297.0) is True
+    assert papel_permite_a4(216.0, 279.0) is True
+    assert papel_permite_a4(0.0) is False
+    assert papel_permite_a4(None) is False
+
+
+def test_imprimir_factura_rechaza_pdf():
+    from modules.documentos.pdf_factura import imprimir_factura
+
+    assert imprimir_factura("<html><body>x</body></html>",
+                            "Microsoft Print to PDF") is False
+    assert imprimir_factura("<html><body>x</body></html>",
+                            "Microsoft XPS Document Writer") is False
+
+
+def test_a4_printer_config_roundtrip():
+    from modules.documentos.pdf_factura import get_a4_printer, save_a4_printer
+
+    db = _db()
+    assert get_a4_printer(db) == ""
+    save_a4_printer(db, "HP LaserJet 1020")
+    assert get_a4_printer(db) == "HP LaserJet 1020"
+    save_a4_printer(db, "")
+    assert get_a4_printer(db) == ""
+    db.close()
+
+
 def test_empresa_extras_roundtrip():
     from modules.documentos.xml_factura import cargar_empresa, guardar_empresa_extra
 

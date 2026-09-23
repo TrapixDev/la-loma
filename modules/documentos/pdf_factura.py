@@ -201,19 +201,90 @@ def guardar_pdf(carpeta: Path, nombre: str, html: str) -> Path | None:
     return destino if destino.exists() else None
 
 
-def imprimir_factura(html: str) -> bool:
-    """Imprime la factura en la impresora por defecto. True si se imprimió.
+_ANCHO_MINIMO_A4_MM = 180.0
 
-    Si la impresora por defecto es un PDF (Microsoft Print to PDF), no abre
-    diálogo y devuelve False para que el caller use el PDF ya guardado.
-    """
-    printer_name = QPrinterInfo.defaultPrinterName()
-    if not printer_name:
+
+def papel_permite_a4(ancho_mm: float, alto_mm: float = 0.0) -> bool:
+    """True si el papel del driver sirve para la factura A4 (no una térmica 80mm)."""
+    try:
+        return float(ancho_mm) >= _ANCHO_MINIMO_A4_MM
+    except (TypeError, ValueError):
         return False
-    lower = printer_name.lower()
+
+
+def _papel_actual(printer: QPrinter) -> tuple[float, float]:
+    try:
+        mm = printer.pageLayout().pageSize().size(QPageSize.Unit.Millimeter)
+        return mm.width(), mm.height()
+    except Exception:
+        return 0.0, 0.0
+
+
+def _elegir_a4_en_soportados(printer: QPrinter) -> bool:
+    """Si el driver soporta A4, fija ese tamaño (el actual puede ser otro)."""
+    try:
+        info = QPrinterInfo.printerInfo(printer.printerName())
+        if info is not None and not info.isNull():
+            for size in info.supportedPageSizes():
+                if "a4" in size.name().lower():
+                    printer.setPageSize(size)
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def imprimir_factura(html: str, printer_name: str = "") -> bool:
+    """Imprime la factura A4 en una impresora de hojas. True si se imprimió.
+
+    - Si no se indica impresora, usa la predeterminada de Windows.
+    - Rechaza impresoras PDF/XPS (el PDF ya se guarda aparte).
+    - Si la impresora es térmica de 80mm (o su papel actual no es A4), NO
+      imprime: la factura se parte y desperdicia papel. Devuelve False para
+      que el llamador avise que el PDF quedó guardado.
+    """
+    name = printer_name or QPrinterInfo.defaultPrinterName()
+    if not name:
+        return False
+    lower = name.lower()
     if "pdf" in lower or "xps" in lower:
         return False
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-    printer.setPrinterName(printer_name)
-    _documento(html).print(printer)
+    printer.setPrinterName(name)
+    ancho_actual, _alto_actual = _papel_actual(printer)
+    if not papel_permite_a4(ancho_actual):
+        # Térmica de 80mm/etiqueta: se evita imprimir la A4 (blanco sin fin).
+        return False
+    if not _elegir_a4_en_soportados(printer):
+        try:
+            printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        except Exception:
+            pass
+    printer.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter)
+    try:
+        _documento(html).print(printer)
+    except Exception:
+        return False
     return True
+
+
+# ---------- configuración de la impresora A4 (app_config) ----------
+
+def get_a4_printer(db) -> str:
+    """Impresora configurada para facturas A4 ("" = predeterminada)."""
+    try:
+        rows = db.execute_query(
+            "SELECT value FROM app_config WHERE key = 'printer_a4'")
+        return str(rows[0]["value"]) if rows else ""
+    except Exception:
+        return ""
+
+
+def save_a4_printer(db, name: str) -> None:
+    """Guarda la impresora de facturas A4 en app_config."""
+    try:
+        db.execute_update(
+            "INSERT OR REPLACE INTO app_config (key, value) VALUES ('printer_a4', ?)",
+            (str(name or "").strip(),))
+    except Exception:
+        pass

@@ -6,7 +6,7 @@ Imprimir / Cancelar.
 """
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPainter, QPixmap, QTextDocument
+from PyQt6.QtGui import QImage, QPageSize, QPainter, QPixmap, QTextDocument
 from PyQt6.QtPrintSupport import QPrinterInfo
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -28,7 +28,9 @@ from modules.documentos.ticket import (
     _TICKET_WIDTH_MM,
     _preparar_impresora,
     advertencia_papel,
+    escala_necesaria,
     imprimir_ticket,
+    tamanos_soportados,
 )
 
 _DPI = 150.0
@@ -157,6 +159,11 @@ class TicketPreviewDialog(QDialog):
         self.papel_combo.currentIndexChanged.connect(self._actualizar_aviso)
         panel_layout.addWidget(self.papel_combo)
 
+        self.papel_label = QLabel("")
+        self.papel_label.setObjectName("previewEtiqueta")
+        self.papel_label.setWordWrap(True)
+        panel_layout.addWidget(self.papel_label)
+
         self.aviso_label = QLabel("")
         self.aviso_label.setObjectName("previewAviso")
         self.aviso_label.setWordWrap(True)
@@ -164,6 +171,11 @@ class TicketPreviewDialog(QDialog):
         panel_layout.addWidget(self.aviso_label)
 
         panel_layout.addStretch(1)
+
+        self.diagnostico_btn = QPushButton("Copiar diagnóstico de impresora")
+        self.diagnostico_btn.setObjectName("secondaryButton")
+        self.diagnostico_btn.clicked.connect(self._copiar_diagnostico)
+        panel_layout.addWidget(self.diagnostico_btn)
 
         self.imprimir_btn = QPushButton("Imprimir")
         self.imprimir_btn.setObjectName("primaryButton")
@@ -215,15 +227,50 @@ class TicketPreviewDialog(QDialog):
         printer = _preparar_impresora(destino, modo, self._html)
         if printer is None:
             self.imprimir_btn.setEnabled(False)
+            self.papel_label.setText("")
             self.aviso_label.setText(
                 "No hay una impresora válida seleccionada. Puede ver el "
                 "ticket, pero no imprimirlo.")
             self.aviso_label.setVisible(True)
             return
         self.imprimir_btn.setEnabled(True)
+        pagina = printer.pageLayout().pageSize()
+        mm = pagina.size(QPageSize.Unit.Millimeter)
+        escala = escala_necesaria(printer, self._html)
+        detalle = f"Papel: {pagina.name()} ({mm.width():.0f}×{mm.height():.0f} mm)"
+        if escala < 1.0:
+            detalle += f" · se reduce al {escala * 100:.0f}% para que quepa"
+        self.papel_label.setText(detalle)
         aviso = advertencia_papel(printer, self._html)
         self.aviso_label.setText(aviso)
         self.aviso_label.setVisible(bool(aviso))
+
+    def _copiar_diagnostico(self) -> None:
+        """Copia al portapapeles los datos del driver (para soporte)."""
+        from PyQt6.QtWidgets import QApplication
+
+        destino = self.destino_combo.currentData() or ""
+        lineas = [f"Impresora: {destino or '(predeterminada)'}"]
+        printer = _preparar_impresora(destino, self.papel_combo.currentData() or "",
+                                      self._html)
+        if printer is not None:
+            pagina = printer.pageLayout().pageSize()
+            mm = pagina.size(QPageSize.Unit.Millimeter)
+            lineas.append(f"Papel usado: {pagina.name()} "
+                          f"({mm.width():.1f} x {mm.height():.1f} mm)")
+        tamanos = tamanos_soportados(destino)
+        lineas.append(f"Tamaños soportados ({len(tamanos)}):")
+        for nombre, ancho, alto in tamanos[:40]:
+            lineas.append(f"  - {nombre} · {ancho:.1f} x {alto:.1f} mm")
+        texto = "\n".join(lineas)
+        try:
+            QApplication.clipboard().setText(texto)
+            self.aviso_label.setText(
+                "Diagnóstico de impresora copiado al portapapeles.")
+            self.aviso_label.setVisible(True)
+        except Exception:
+            self.aviso_label.setText("No se pudo copiar el diagnóstico.")
+            self.aviso_label.setVisible(True)
 
     def _imprimir(self) -> None:
         destino = self.destino_combo.currentData() or ""

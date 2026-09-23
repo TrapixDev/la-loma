@@ -65,14 +65,21 @@ def reimprimir_factura(db, cart_service, sale_id: int, imprimir: bool = True) ->
         return None
     company = _xml.cargar_empresa(db)
     resultado = generar_documentos(sale, company, payload=None)
+    impreso = False
     if imprimir and resultado["pdf"]:
         try:
             from .ticket import imprimir_ticket_venta
-            if not imprimir_ticket_venta(sale, company, db,
-                                         es_reimpresion=True):
-                _pdf.imprimir_factura(resultado["html"])
+            if imprimir_ticket_venta(sale, company, db, es_reimpresion=True):
+                impreso = True
+            else:
+                # La térmica no sirvió: se intenta la factura A4 en la
+                # impresora configurada (o la predeterminada de Windows).
+                from .pdf_factura import get_a4_printer
+                impreso = _pdf.imprimir_factura(resultado["html"],
+                                                get_a4_printer(db))
         except Exception:
-            _pdf.imprimir_factura(resultado["html"])
+            impreso = False
+    resultado["impreso"] = impreso
     return resultado
 
 

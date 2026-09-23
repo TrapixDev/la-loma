@@ -109,7 +109,13 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
 
 ## Versiones
 
-- 1.0.2 — cobro: al presionar Enter con un monto insuficiente, el segundo
+- 1.0.2 — impresión: **una sola página garantizada** (pintado con QPainter,
+  sin paginado), papel tomado **solo de los tamaños que el driver soporta**
+  (se corrigió el bug de `QPrinter.supportedPageSizes`, que no existe en Qt6 y
+  causaba 13 páginas/blanco sin fin) con reducción automática si el ticket no
+  cabe. **Facturas A4**: se elige la impresora de hojas en Configuración; si
+  solo hay térmica de 80 mm, no se imprime la A4 (se avisa y queda el PDF).
+  Cobro: al presionar Enter con un monto insuficiente, el segundo
   método del pago mixto queda **vacío** (COBRAR deshabilitado hasta cubrir el
   total) para evitar cobros por error; el autocompletado sigue disponible en el
   botón "Completar falta con el otro método". Tickets: **formato tipo factura
@@ -117,9 +123,8 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
   centrado, tabla CANT/DETALLE/PRECIO/SUBTOT/IVA, totales, "SON" en letras,
   IBAN/SINPE y marca de REIMPRESIÓN), **visor de vista previa estilo Chrome**
   (hoja + panel con Destino/Copias/Papel e Imprimir/Cancelar) y selector de
-  **papel del ticket** (Windows / rollo continuo 80 mm / etiqueta) que corrige
-  el caso de etiquetas imprimiendo una línea por etiqueta. Diagnóstico por rol
-  y arranque sin destellos de consola (icacls/netsh ocultos).
+  **papel del ticket** (Windows / rollo continuo 80 mm / etiqueta). Diagnóstico
+  por rol y arranque sin destellos de consola (icacls/netsh ocultos).
 - 1.0.1 — seguridad: credenciales cifradas con DPAPI, ACLs restringidas en
   `%APPDATA%\PosLaLoma`, servidor solo para redes privadas con límites de
   entrada, HTTPS opcional, firewall acotado a la red local y actualizaciones
