@@ -140,6 +140,15 @@ class Config:
     # bajo el total ("0" en config.ini para ocultarlo).
     MOSTRAR_EQUIVALENTE_CRC = _opt("mostrar_equivalente_crc") != "0"
 
+    # Modo de prueba de impresión: con POS_PRINT_TEST=1 se permite imprimir a
+    # una impresora PDF (virtual) guardando el archivo en POS_PRINT_TEST_PDF,
+    # para validar la salida sin impresora física.
+    PRINT_TEST_MODE = os.environ.get("POS_PRINT_TEST") == "1"
+    PRINT_TEST_PDF = os.environ.get("POS_PRINT_TEST_PDF", "")
+    # Carpeta donde quedan los PDF de prueba al imprimir a una impresora
+    # virtual (por defecto: Documentos\PosLaLoma\pruebas).
+    PRINT_TEST_DIR = os.environ.get("POS_PRINT_TEST_DIR", "")
+
     SERVER_HOST = "0.0.0.0"
     SERVER_PORT = _resolve_port(_opt("server_port"), _opt("server_url"))
     # Si el usuario fijó puerto o URL en config.ini no se auto-mueve el puerto.

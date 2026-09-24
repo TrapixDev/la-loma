@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 import time
 
@@ -10,6 +11,11 @@ sys.path.insert(0, PROJECT_DIR)
 os.chdir(PROJECT_DIR)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+from PyQt6.QtWidgets import QApplication
+
+app = QApplication.instance() or QApplication([])
+
+from config import Config
 from database.db_manager import DatabaseManager
 from database.models import Sale, SaleItem
 from modules.documentos.ticket import (
@@ -20,6 +26,11 @@ from modules.documentos.ticket import (
     save_printer_name,
     _desglose_pago,
 )
+
+# Las pruebas de impresión escriben en una carpeta temporal (nunca en
+# Documentos ni en la impresora real).
+_CARPETA_PRUEBAS = tempfile.mkdtemp(prefix="pos_ticket_test_")
+Config.PRINT_TEST_DIR = _CARPETA_PRUEBAS
 
 TEST_DB = os.path.join(PROJECT_DIR, "tests", ".tmp", "test_ticket.db")
 

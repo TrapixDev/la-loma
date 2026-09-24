@@ -353,6 +353,13 @@ class SettingsWidget(QWidget):
         test_printer_button.setObjectName("primaryButton")
         test_printer_button.clicked.connect(self._test_printer)
 
+        test_a4_button = QPushButton("Probar factura A4")
+        test_a4_button.setObjectName("secondaryButton")
+        test_a4_button.setToolTip(
+            "Imprime una factura A4 de ejemplo en la impresora de hojas "
+            "elegida (la térmica de 80mm no imprime A4).")
+        test_a4_button.clicked.connect(self._test_a4)
+
         printer_hint = QLabel("Se usa al imprimir tickets de venta (térmica 80mm)")
         printer_hint.setObjectName("settingsHint")
         printer_form.addRow(self._label("Impresora de tickets:"), self.printer_combo)
@@ -360,6 +367,7 @@ class SettingsWidget(QWidget):
         printer_form.addRow(self._label("Impresora para facturas A4:"), self.a4_combo)
         printer_form.addRow("", self.print_dialog_check)
         printer_form.addRow("", test_printer_button)
+        printer_form.addRow("", test_a4_button)
         printer_form.addRow("", printer_hint)
         printer_page_layout.addWidget(printer_group)
 
@@ -859,12 +867,21 @@ class SettingsWidget(QWidget):
         db = self.services.get("db")
         modo = self.paper_combo.currentData() or (
             get_paper_mode(db) if db is not None else "")
-        nombre_papel = self.paper_combo.currentText()
-        etiqueta = (f"Impresora: {printer_name or 'Predeterminada de Windows'}"
-                    f" | Papel: {nombre_papel}")
+
+        def _factory(font_pt, line_spacing, *_extra):
+            nombre_papel = self.paper_combo.currentText()
+            etiqueta = (f"Impresora: {printer_name or 'Predeterminada de Windows'}"
+                        f" | Papel: {nombre_papel}")
+            return ticket_prueba_html(etiqueta, font_pt=font_pt,
+                                      line_spacing=line_spacing)
+
+        from modules.documentos.ticket import get_ticket_settings
+        ajustes = get_ticket_settings(db)
+        html = _factory(ajustes.get("font_pt"), ajustes.get("line_spacing"))
         try:
-            ok = previsualizar_ticket(ticket_prueba_html(etiqueta), printer_name,
-                                      modo, parent=self)
+            ok = previsualizar_ticket(
+                html, printer_name, modo, parent=self, db=db,
+                html_factory=_factory, ajustes=ajustes)
         except Exception as exc:
             QMessageBox.warning(self, "Impresora",
                                 f"No se pudo abrir la vista previa:\n{exc}")
@@ -874,6 +891,46 @@ class SettingsWidget(QWidget):
                 self, "Impresora",
                 "No se pudo preparar la impresora.\nVerifique que esté "
                 "encendida, conectada y no sea un PDF/XPS.")
+
+    def _test_a4(self) -> None:
+        """Imprime una factura A4 de ejemplo en la impresora de hojas elegida."""
+        db = self.services.get("db")
+        try:
+            from database.models import Sale, SaleItem
+            from modules.documentos.pdf_factura import (
+                factura_html,
+                get_a4_printer,
+                imprimir_factura,
+            )
+            from modules.documentos.xml_factura import cargar_empresa
+
+            company = cargar_empresa(db) if db is not None else {}
+            venta = Sale(
+                invoice_number="V-EJEMPLO", client_name="Cliente de ejemplo",
+                subtotal=13274.34, tax_amount=1725.66, total=15000.0,
+                payment_method="efectivo", invoice_type="general",
+                currency="CRC", exchange_rate=520.0, status="completada",
+                hacienda_status="ACEPTADA", station="CAJA1",
+                user_name="PRUEBA", created_at="2026-09-21 09:00:00",
+                items=[SaleItem(product_id=1, product_name="Producto de ejemplo",
+                                quantity=1, unit_price=13274.34,
+                                tax_amount=1725.66, total=13274.34)],
+            )
+            html = factura_html(venta, company)
+            destino = get_a4_printer(db) if db is not None else ""
+            if imprimir_factura(html, destino):
+                QMessageBox.information(
+                    self, "Factura A4",
+                    "Factura A4 de ejemplo enviada a la impresora.")
+            else:
+                QMessageBox.warning(
+                    self, "Factura A4",
+                    "No se imprimió: la impresora elegida no sirve para hojas "
+                    "A4 (la térmica de 80 mm no imprime A4).\nElija una "
+                    "impresora A4 en «Impresora para facturas A4».")
+        except Exception as exc:
+            QMessageBox.warning(self, "Factura A4",
+                                f"No se pudo probar la factura A4:\n{exc}")
 
     # ---------- documentos ----------
 

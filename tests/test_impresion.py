@@ -92,11 +92,37 @@ def test_elegir_papel_sin_ancho_80_usa_todas():
 
 
 def test_impresora_pdf_se_rechaza():
-    assert _preparar_impresora("Microsoft Print to PDF") is None
-    assert _preparar_impresora("Microsoft XPS Document Writer") is None
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
+    from modules.documentos.ticket import (
+        _es_impresora_pdf,
+        _preparar_impresora,
+        resolver_impresora,
+        ultima_salida_pdf,
+    )
+
+    assert _es_impresora_pdf("Microsoft Print to PDF") is True
+    assert _es_impresora_pdf("Microsoft XPS Document Writer") is True
+
+    nombres = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if "POS-Test" in nombres:
+        # Con la impresora virtual instalada, la salida se redirige a un PDF
+        # visible en vez de fallar.
+        printer = _preparar_impresora("Microsoft Print to PDF")
+        assert printer is not None
+        assert ultima_salida_pdf()
+    elif "Microsoft Print to PDF" in nombres:
+        assert _preparar_impresora("Microsoft Print to PDF") is None
+    # Un nombre inexistente no rompe: cae a la impresora predeterminada.
+    assert resolver_impresora("Impresora inexistente 123")
 
 
 def test_imprimir_ticket_pdf_devuelve_false():
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
+    nombres = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if "POS-Test" in nombres:
+        pytest.skip("POS-Test instalada: la impresión se redirige a PDF de prueba")
     assert imprimir_ticket("<html><body>x</body></html>",
                            "Microsoft Print to PDF") is False
 
@@ -121,8 +147,14 @@ def test_papel_y_dialogo_se_guardan():
 
 
 def test_previsualizar_sin_impresora_valida():
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
     from modules.documentos.ticket import previsualizar_ticket
 
+    nombres = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if "POS-Test" in nombres:
+        pytest.skip("POS-Test instalada: hay impresora virtual disponible")
+    # No debe abrir el visor (es modal) cuando no hay impresora válida.
     assert previsualizar_ticket("<html><body>x</body></html>",
                                 "Microsoft Print to PDF") is False
 
@@ -302,6 +334,189 @@ def test_a4_printer_config_roundtrip():
     save_a4_printer(db, "")
     assert get_a4_printer(db) == ""
     db.close()
+
+
+def test_fuente_y_margenes_editables():
+    from modules.documentos.ticket import _medir_alto, ticket_html
+
+    chico = ticket_html(_venta(), dict(EMPRESA_BASE), font_pt=9.0)
+    grande = ticket_html(_venta(), dict(EMPRESA_BASE), font_pt=14.0)
+    assert "font-size: 9.0pt" in chico
+    assert "font-size: 14.0pt" in grande
+    # Con márgenes distintos cambia el ancho útil y la estimación de alto.
+    alto_80 = _medir_alto(grande, 80.0, 3.0)
+    alto_58 = _medir_alto(grande, 58.0, 3.0)
+    assert alto_58 > alto_80, "en papel más angosto el ticket es más alto"
+
+
+def test_ticket_settings_roundtrip():
+    from modules.documentos.ticket import (
+        DEFAULT_FONT_PT,
+        get_ticket_settings,
+        save_ticket_settings,
+    )
+
+    db = _db()
+    inicial = get_ticket_settings(db)
+    assert inicial["font_pt"] == DEFAULT_FONT_PT
+    assert inicial["margin_mm"] == 3.0
+    assert inicial["scale_mode"] == "ajustar"
+    save_ticket_settings(db, font_pt=14.0, margin_mm=5.0, width_mm=80.0,
+                         line_spacing=1.5, scale_mode="real")
+    ajustes = get_ticket_settings(db)
+    assert ajustes["font_pt"] == 14.0
+    assert ajustes["margin_mm"] == 5.0
+    assert ajustes["line_spacing"] == 1.5
+    assert ajustes["scale_mode"] == "real"
+    # Valores fuera de rango se recortan.
+    save_ticket_settings(db, font_pt=99.0, margin_mm=-4.0, width_mm=80.0,
+                         line_spacing=9.9, scale_mode="invalido")
+    ajustes = get_ticket_settings(db)
+    assert ajustes["font_pt"] == 20.0
+    assert ajustes["margin_mm"] == 0.0
+    assert ajustes["line_spacing"] == 2.0
+    assert ajustes["scale_mode"] == "ajustar"
+    db.close()
+
+
+def test_tamano_que_mejor_encaja_ignora_invalidos():
+    from modules.documentos.ticket import _tamano_que_mejor_encaja
+
+    tamanos = [("", -1.0, -1.0), ("82(80)mm x 3276mm", 80.1, 3275.9),
+               ("80(72)mm x 297mm", 72.0, 297.0), ("sin medidas", 0.0, 0.0)]
+    elegido = _tamano_que_mejor_encaja(tamanos, 120.0)
+    assert elegido is not None and elegido[0] == "82(80)mm x 3276mm"
+
+
+def test_resolver_impresora():
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
+    from modules.documentos.ticket import resolver_impresora
+
+    impresoras = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if not impresoras:
+        pytest.skip("No hay impresoras instaladas en esta PC")
+    primera = impresoras[0]
+    assert resolver_impresora(primera) == primera
+    assert resolver_impresora(primera.upper()) == primera
+    assert resolver_impresora(primera[:6]) == primera
+    assert resolver_impresora("Impresora inexistente 123") in impresoras
+
+
+def test_visor_actualiza_al_cambiar_letra():
+    from modules.documentos.ticket import (
+        get_ticket_settings,
+        ticket_html,
+    )
+    from ui.ticket_preview import TicketPreviewDialog
+
+    db = _db()
+
+    def fabrica(font_pt, line_spacing):
+        return ticket_html(_venta(), dict(EMPRESA_BASE), font_pt=font_pt,
+                           line_spacing=line_spacing)
+
+    ajustes = get_ticket_settings(db)
+    dialog = TicketPreviewDialog(fabrica(ajustes["font_pt"],
+                                         ajustes["line_spacing"]),
+                                 db=db, html_factory=fabrica, ajustes=ajustes)
+    try:
+        chico = dialog._pagina.height()
+        dialog.font_spin.setValue(16.0)
+        app.processEvents()
+        grande = dialog._pagina.height()
+        assert grande > chico, "el visor debe re-renderizar con letra más grande"
+        dialog.margin_spin.setValue(6.0)
+        app.processEvents()
+        assert dialog._pagina.width() == dialog._pagina.width()
+        dialog._guardar_predeterminados()
+        guardado = get_ticket_settings(db)
+        assert guardado["font_pt"] == 16.0
+        assert guardado["margin_mm"] == 6.0
+    finally:
+        dialog.close()
+        db.close()
+
+
+def test_impresion_pdf_una_pagina():
+    """Modo de prueba: imprime a Microsoft Print to PDF y verifica 1 página."""
+    import re
+
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
+    from config import Config
+    from modules.documentos.ticket import imprimir_ticket, ticket_html
+
+    nombres = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if "Microsoft Print to PDF" not in nombres:
+        pytest.skip("No está instalada la impresora virtual PDF")
+
+    destino = os.path.join(PROJECT_DIR, "tests", ".tmp", "ticket_prueba.pdf")
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    if os.path.exists(destino):
+        os.remove(destino)
+
+    original_modo = Config.PRINT_TEST_MODE
+    original_pdf = Config.PRINT_TEST_PDF
+    Config.PRINT_TEST_MODE = True
+    Config.PRINT_TEST_PDF = destino
+    try:
+        html = ticket_html(_venta(), dict(EMPRESA_BASE), font_pt=12.0)
+        ok = imprimir_ticket(html, "Microsoft Print to PDF", "rollo")
+        assert ok is True, "debía imprimir a la impresora virtual"
+        assert os.path.isfile(destino), "no se generó el PDF de prueba"
+        with open(destino, "rb") as handle:
+            datos = handle.read()
+        paginas = len(re.findall(rb"/Type\s*/Page[^s]", datos))
+        assert paginas == 1, f"el ticket debe salir en 1 página (salieron {paginas})"
+        assert re.search(rb"/MediaBox", datos), "el PDF no tiene MediaBox"
+    finally:
+        Config.PRINT_TEST_MODE = original_modo
+        Config.PRINT_TEST_PDF = original_pdf
+        if os.path.exists(destino):
+            os.remove(destino)
+
+
+def test_impresion_a_impresora_virtual_visible():
+    """La impresora virtual POS-Test debe dejar un PDF visible de 1 página."""
+    import re
+    import tempfile
+
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
+    from config import Config
+    from modules.documentos.ticket import (
+        imprimir_ticket,
+        ticket_html,
+        ultima_salida_pdf,
+    )
+
+    nombres = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if "POS-Test" not in nombres:
+        pytest.skip("No está creada la impresora virtual POS-Test")
+
+    carpeta = Path(tempfile.mkdtemp(prefix="pos_pruebas_"))
+    original_dir = Config.PRINT_TEST_DIR
+    original_pdf = Config.PRINT_TEST_PDF
+    Config.PRINT_TEST_DIR = str(carpeta)
+    Config.PRINT_TEST_PDF = ""
+    try:
+        html = ticket_html(_venta(), dict(EMPRESA_BASE), font_pt=12.0)
+        ok = imprimir_ticket(html, "POS-Test", "rollo")
+        assert ok is True
+        salida = ultima_salida_pdf()
+        assert salida and salida.startswith(str(carpeta)), salida
+        assert os.path.isfile(salida), "no se generó el PDF de prueba"
+        with open(salida, "rb") as handle:
+            datos = handle.read()
+        assert datos.startswith(b"%PDF")
+        paginas = len(re.findall(rb"/Type\s*/Page[^s]", datos))
+        assert paginas == 1, f"debe ser 1 página (salieron {paginas})"
+    finally:
+        Config.PRINT_TEST_DIR = original_dir
+        Config.PRINT_TEST_PDF = original_pdf
+        import shutil
+        shutil.rmtree(carpeta, ignore_errors=True)
 
 
 def test_empresa_extras_roundtrip():

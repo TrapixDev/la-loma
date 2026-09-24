@@ -7,6 +7,7 @@ papel y cortar justo después del ticket.
 
 import base64
 import json as _json
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QMarginsF, QSizeF
@@ -16,8 +17,17 @@ from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 from config import Config
 from utils.helpers import format_currency, monto_en_letras
 
-_TICKET_WIDTH_MM = 80
-_MARGIN_MM = 3
+_TICKET_WIDTH_MM = 80.0
+_MARGIN_MM = 3.0
+# Predeterminados de impresión (editables en el visor y guardados por caja).
+DEFAULT_FONT_PT = 12.0
+DEFAULT_LINE_SPACING = 1.35
+SCALE_FIT = "ajustar"
+SCALE_REAL = "real"
+SCALE_MODES = {
+    SCALE_FIT: "Ajustar al papel",
+    SCALE_REAL: "Tamaño real (sin reducir)",
+}
 
 
 # ---------- helpers ----------
@@ -121,7 +131,9 @@ def _pagos_ticket(sale, moneda) -> list[tuple[str, str]]:
     return filas
 
 
-def ticket_html(sale, company: dict, es_reimpresion: bool = False) -> str:
+def ticket_html(sale, company: dict, es_reimpresion: bool = False,
+                font_pt: float = DEFAULT_FONT_PT,
+                line_spacing: float = DEFAULT_LINE_SPACING) -> str:
     """HTML compacto del ticket térmico (80mm) para una venta guardada."""
     items = sale.items or []
     currency = str(getattr(sale, "currency", "CRC") or "CRC")
@@ -250,25 +262,27 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False) -> str:
                         if es_reimpresion else "")
 
     fecha = _fecha_corta(getattr(sale, "created_at", ""))
+    base = max(6.0, min(20.0, float(font_pt or DEFAULT_FONT_PT)))
+    espaciado = max(1.0, min(2.0, float(line_spacing or DEFAULT_LINE_SPACING)))
     return f"""<html><head><style>
-body {{ font-family: 'Courier New', monospace; font-size: 9pt; color: #000; margin: 0; }}
-div {{ line-height: 1.35; }}
+body {{ font-family: 'Courier New', monospace; font-size: {base:.1f}pt; color: #000; margin: 0; }}
+div {{ line-height: {espaciado:.2f}; }}
 .centro {{ text-align: center; }}
-.nombre {{ font-weight: bold; font-size: 10.5pt; }}
-.mini {{ font-size: 8pt; }}
+.nombre {{ font-weight: bold; font-size: {base + 1.5:.1f}pt; }}
+.mini {{ font-size: {base - 1:.1f}pt; }}
 .negrita {{ font-weight: bold; }}
 .wrap {{ word-wrap: break-word; }}
 .linea {{ border-top: 1px dashed #000; margin: 3px 0; }}
 table {{ width: 100%; border-collapse: collapse; }}
 td {{ padding: 0; vertical-align: top; }}
-th {{ font-size: 7.5pt; text-align: left; font-weight: bold; }}
+th {{ font-size: {base - 1.5:.1f}pt; text-align: left; font-weight: bold; }}
 .q {{ width: 8%; text-align: right; }}
 .d {{ width: 40%; }}
-.r {{ width: 17%; text-align: right; white-space: nowrap; font-size: 8pt; }}
+.r {{ width: 17%; text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
 .et {{ font-weight: bold; }}
-table.lineas td {{ font-size: 7.5pt; }}
-.total {{ font-weight: bold; font-size: 10.5pt; }}
-.clave {{ font-size: 7pt; word-break: break-all; margin-top: 3px; }}
+table.lineas td {{ font-size: {base - 1.5:.1f}pt; }}
+.total {{ font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
+.clave {{ font-size: {base - 2:.1f}pt; word-break: break-all; margin-top: 3px; }}
 </style></head><body>
 {logo_html}
 <div class="centro nombre">{_html_escape(company.get("company_name", "POS La Loma"))}</div>
@@ -304,14 +318,18 @@ table.lineas td {{ font-size: 7.5pt; }}
 </body></html>"""
 
 
-def ticket_prueba_html(extra: str = "") -> str:
+def ticket_prueba_html(extra: str = "", font_pt: float = DEFAULT_FONT_PT,
+                       line_spacing: float = DEFAULT_LINE_SPACING) -> str:
     """Ticket de prueba para verificar la impresora (con datos de soporte)."""
     extra_html = (f'<div class="centro mini">{_html_escape(extra)}</div>'
                   if extra else "")
-    return """<html><head><style>
-body {{ font-family: 'Courier New', monospace; font-size: 9pt; color: #000; }}
+    base = max(6.0, min(20.0, float(font_pt or DEFAULT_FONT_PT)))
+    espaciado = max(1.0, min(2.0, float(line_spacing or DEFAULT_LINE_SPACING)))
+    return f"""<html><head><style>
+body {{ font-family: 'Courier New', monospace; font-size: {base:.1f}pt; color: #000; }}
+div {{ line-height: {espaciado:.2f}; }}
 .centro {{ text-align: center; }}
-.mini {{ font-size: 7.5pt; color: #333; }}
+.mini {{ font-size: {base - 1.5:.1f}pt; color: #333; }}
 .linea {{ border-top: 1px dashed #000; margin: 3px 0; }}
 </style></head><body>
 <div class="centro"><b>PRUEBA DE IMPRESORA</b></div>
@@ -350,9 +368,13 @@ def elegir_papel(soportadas: list[tuple[str, float, float]], modo: str,
     """
     if not soportadas:
         return None
-    candidatas = [p for p in soportadas if abs(p[1] - ancho_mm) <= 3]
+    validas = [p for p in soportadas
+               if str(p[0] or "").strip() and p[1] > 0 and p[2] > 0]
+    if not validas:
+        return None
+    candidatas = [p for p in validas if abs(p[1] - ancho_mm) <= 5]
     if not candidatas:
-        candidatas = list(soportadas)
+        candidatas = validas
     if modo == PAPER_ROLL:
         return max(candidatas, key=lambda p: p[2])
     if modo == PAPER_LABEL:
@@ -366,25 +388,61 @@ def _documento(html: str) -> QTextDocument:
     return doc
 
 
-def _medir_alto(html: str) -> float:
+def _medir_alto(html: str, width_mm: float = _TICKET_WIDTH_MM,
+                margin_mm: float = _MARGIN_MM) -> float:
     """Estima el alto (mm) del ticket según su contenido."""
     try:
         mm_to_px = 96.0 / 25.4
-        width_px = max(1.0, (_TICKET_WIDTH_MM - 2 * _MARGIN_MM) * mm_to_px)
+        ancho = max(20.0, float(width_mm or _TICKET_WIDTH_MM))
+        margen = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
+        width_px = max(1.0, (ancho - 2 * margen) * mm_to_px)
         doc = _documento(html)
         doc.setPageSize(QSizeF(width_px, 100000.0))
-        alto_mm = (doc.size().height() / mm_to_px) + 2 * _MARGIN_MM
-        return min(max(alto_mm, 50.0), 500.0)
+        alto_mm = (doc.size().height() / mm_to_px) + 2 * margen
+        return min(max(alto_mm, 30.0), 1000.0)
     except Exception:
         return 297.0
 
 
+def resolver_impresora(printer_name: str = "") -> str:
+    """Devuelve el nombre real de la impresora en Windows.
+
+    Acepta el nombre exacto, sin distinguir mayúsculas, o una coincidencia
+    parcial (el driver a veces aparece con "(Copiar 1)"); si no encuentra nada,
+    usa la predeterminada.
+    """
+    try:
+        disponibles = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    except Exception:
+        disponibles = []
+    if not disponibles:
+        return printer_name or ""
+    if printer_name:
+        if printer_name in disponibles:
+            return printer_name
+        buscado = printer_name.strip().lower()
+        for nombre in disponibles:
+            if nombre.lower() == buscado:
+                return nombre
+        for nombre in disponibles:
+            if buscado and buscado in nombre.lower():
+                return nombre
+    try:
+        predeterminada = QPrinterInfo.defaultPrinterName()
+    except Exception:
+        predeterminada = ""
+    if predeterminada:
+        return predeterminada
+    return disponibles[0]
+
+
 def tamanos_soportados(printer_name: str) -> list[tuple[str, float, float]]:
-    """Tamaños de papel que el driver reporta (nombre, ancho_mm, alto_mm).
+    """Tamaños de papel válidos que el driver reporta (nombre, ancho, alto mm).
 
     OJO: en Qt6 la lista la da QPrinterInfo (QPrinter ya no tiene
     supportedPageSizes); ese era el motivo de que el modo de papel no se
     aplicara y el ticket se paginara con el formulario corto del driver.
+    Se descartan las entradas inválidas (nombre vacío o medidas <= 0).
     """
     if not printer_name:
         return []
@@ -395,7 +453,10 @@ def tamanos_soportados(printer_name: str) -> list[tuple[str, float, float]]:
         tamanos: list[tuple[str, float, float]] = []
         for size in info.supportedPageSizes():
             mm = size.size(QPageSize.Unit.Millimeter)
-            tamanos.append((size.name(), mm.width(), mm.height()))
+            nombre = str(size.name() or "").strip()
+            if not nombre or mm.width() <= 0 or mm.height() <= 0:
+                continue
+            tamanos.append((nombre, mm.width(), mm.height()))
         return tamanos
     except Exception:
         return []
@@ -405,9 +466,11 @@ def _tamano_que_mejor_encaja(soportadas: list[tuple[str, float, float]],
                              alto_contenido: float,
                              ancho_mm: float = _TICKET_WIDTH_MM) -> tuple[str, float, float] | None:
     """El tamaño de ~80mm más chico que alcance el ticket (o el mayor si ninguno)."""
-    candidatas = [p for p in soportadas if abs(p[1] - ancho_mm) <= 5]
+    validas = [p for p in soportadas
+               if str(p[0] or "").strip() and p[1] > 0 and p[2] > 0]
+    candidatas = [p for p in validas if abs(p[1] - ancho_mm) <= 5]
     if not candidatas:
-        candidatas = list(soportadas)
+        candidatas = validas
     if not candidatas:
         return None
     alcanzan = [p for p in candidatas if p[2] + 1 >= alto_contenido]
@@ -416,8 +479,64 @@ def _tamano_que_mejor_encaja(soportadas: list[tuple[str, float, float]],
     return max(candidatas, key=lambda p: p[2])
 
 
+def _es_impresora_pdf(name: str) -> bool:
+    lower = (name or "").lower()
+    return "pdf" in lower or "xps" in lower
+
+
+def _es_impresora_prueba(name: str) -> bool:
+    """True para la impresora virtual de pruebas (POS-Test)."""
+    lower = (name or "").lower()
+    return "pos-test" in lower or "pos_test" in lower or "prueba" in lower
+
+
+def _impresora_prueba_instalada() -> str:
+    """Nombre de la impresora virtual de pruebas si está instalada."""
+    try:
+        for info in QPrinterInfo.availablePrinters():
+            if _es_impresora_prueba(info.printerName()):
+                return info.printerName()
+    except Exception:
+        pass
+    return ""
+
+
+_ULTIMA_SALIDA_PDF = ""
+
+
+def ultima_salida_pdf() -> str:
+    """Ruta del último PDF de prueba generado ("" si no hubo)."""
+    return _ULTIMA_SALIDA_PDF
+
+
+def _carpeta_pruebas() -> Path:
+    """Carpeta visible para los PDF de prueba (Documentos\\PosLaLoma\\pruebas)."""
+    if Config.PRINT_TEST_DIR:
+        return Path(Config.PRINT_TEST_DIR)
+    documentos = Path.home() / "Documents"
+    if not documentos.is_dir():
+        documentos = Path.home()
+    return documentos / "PosLaLoma" / "pruebas"
+
+
+def _destino_pdf_prueba() -> Path | None:
+    """Archivo PDF de salida para impresoras virtuales/prueba."""
+    try:
+        if Config.PRINT_TEST_PDF:
+            destino = Path(Config.PRINT_TEST_PDF)
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            return destino
+        carpeta = _carpeta_pruebas()
+        carpeta.mkdir(parents=True, exist_ok=True)
+        return carpeta / f"ticket_{datetime.now():%Y%m%d_%H%M%S}.pdf"
+    except Exception:
+        return None
+
+
 def _preparar_impresora(printer_name: str = "", modo: str = "",
-                        html: str = "", copias: int = 1) -> QPrinter | None:
+                        html: str = "", copias: int = 1,
+                        width_mm: float = _TICKET_WIDTH_MM,
+                        margin_mm: float = _MARGIN_MM) -> QPrinter | None:
     """Crea el QPrinter usando SIEMPRE un tamaño soportado por el driver.
 
     Reglas:
@@ -426,16 +545,30 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
       en blanco sin fin).
     - rollo: el de ~80mm con mayor alto; etiqueta: el más chico que alcance.
     - windows: respeta el papel actual y, si es más corto que el ticket,
-      salta al tamaño soportado que mejor encaje.
+      salta al tamaño soportado que mejor encaje (aunque no alcance, se usa
+      el mayor para no reducir de más la letra).
     - El alto nunca se inventa: si el ticket no cabe en la página, el pintado
       lo reduce para que entre en una sola página.
+    - Con POS_PRINT_TEST=1 se permite imprimir a PDF (impresora virtual) para
+      pruebas, guardando el archivo en POS_PRINT_TEST_PDF o en %TEMP%.
     """
-    name = printer_name or QPrinterInfo.defaultPrinterName()
+    name = resolver_impresora(printer_name)
     if not name:
         return None
-    lower = name.lower()
-    if "pdf" in lower or "xps" in lower:
-        return None
+    global _ULTIMA_SALIDA_PDF
+    _ULTIMA_SALIDA_PDF = ""
+    es_pdf = _es_impresora_pdf(name)
+    es_prueba = _es_impresora_prueba(name)
+    if es_pdf and not (Config.PRINT_TEST_MODE or es_prueba):
+        # La configurada/predeterminada es de PDF: si hay una impresora
+        # virtual de pruebas, se usa para que el ticket salga como PDF visible.
+        sustituta = _impresora_prueba_instalada()
+        if sustituta:
+            name = sustituta
+            es_pdf = False
+            es_prueba = True
+        else:
+            return None
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setPrinterName(name)
     if copias > 1:
@@ -443,6 +576,16 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
             printer.setCopyCount(int(copias))
         except Exception:
             pass
+    if es_pdf or es_prueba:
+        # Impresora virtual: el PDF sale a un archivo visible (Documentos\
+        # PosLaLoma\pruebas) para poder verlo/abrirlo después de imprimir.
+        destino = _destino_pdf_prueba()
+        if destino is not None:
+            try:
+                printer.setOutputFileName(str(destino))
+                _ULTIMA_SALIDA_PDF = str(destino)
+            except Exception:
+                _ULTIMA_SALIDA_PDF = ""
     modo = modo if modo in PAPER_MODES else PAPER_WINDOWS
 
     actual = printer.pageLayout().pageSize()
@@ -450,19 +593,17 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
     alto_actual = actual_mm.height()
     aplicado = f"actual {actual_mm.width():.0f}x{alto_actual:.0f}mm"
 
-    alto_contenido = _medir_alto(html) if html else 0.0
+    alto_contenido = _medir_alto(html, width_mm, margin_mm) if html else 0.0
     soportadas = tamanos_soportados(name)
     elegida = None
     if modo == PAPER_ROLL:
-        elegida = elegir_papel(soportadas, PAPER_ROLL)
+        elegida = elegir_papel(soportadas, PAPER_ROLL, width_mm)
     elif modo == PAPER_LABEL:
-        elegida = _tamano_que_mejor_encaja(soportadas, alto_contenido)
+        elegida = _tamano_que_mejor_encaja(soportadas, alto_contenido, width_mm)
     elif modo == PAPER_WINDOWS and html and alto_actual + 1 < alto_contenido:
         # El papel del driver no alcanza (p. ej. etiqueta 80x15): se usa el
-        # tamaño soportado que mejor encaje.
-        elegida = _tamano_que_mejor_encaja(soportadas, alto_contenido)
-        if elegida is not None and elegida[2] + 1 < alto_contenido:
-            elegida = None  # ni el mayor alcanza: se reduce al imprimir
+        # mayor tamaño de ~80mm que ofrezca el driver.
+        elegida = _tamano_que_mejor_encaja(soportadas, alto_contenido, width_mm)
         if elegida is not None:
             aplicado += " (papel corto)"
     if elegida is not None:
@@ -473,8 +614,9 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
                     + (" (el papel del driver era corto)"
                        if "papel corto" in aplicado else ""))
 
+    margen = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
     printer.setPageMargins(
-        QMarginsF(_MARGIN_MM, _MARGIN_MM, _MARGIN_MM, _MARGIN_MM),
+        QMarginsF(margen, margen, margen, margen),
         QPageLayout.Unit.Millimeter)
     _log_impresora(name, actual_mm, modo, aplicado, soportadas)
     return printer
@@ -518,20 +660,22 @@ def _escala_para_caber(alto_pagina: float, alto_doc: float,
     return max(minimo, alto_pagina / alto_doc)
 
 
-def _imprimir_una_pagina(html: str, printer: QPrinter) -> bool:
+def _imprimir_una_pagina(html: str, printer: QPrinter,
+                         reducir: bool = True) -> bool:
     """Dibuja el ticket en UNA sola página.
 
     No usa QTextDocument.print() (que pagina el contenido y era el origen de
     las "13 páginas"): pinta el documento una vez, recortado al área imprimible
-    y reducido si no cabe. Así nunca se emite más de una página ni papel en
-    blanco sin fin.
+    y reducido si no cabe (salvo que `reducir` sea False). Así nunca se emite
+    más de una página ni papel en blanco sin fin.
     """
     try:
         rect = printer.pageLayout().paintRectPixels(printer.resolution())
         doc = _documento(html)
         doc.setTextWidth(max(1.0, float(rect.width())))
         alto_doc = float(doc.size().height())
-        escala = _escala_para_caber(float(rect.height()), alto_doc)
+        escala = (_escala_para_caber(float(rect.height()), alto_doc)
+                  if reducir else 1.0)
         painter = QPainter(printer)
         try:
             painter.setClipRect(rect)
@@ -571,47 +715,64 @@ def advertencia_papel(printer: QPrinter, html: str) -> str:
 
 
 def imprimir_ticket(html: str, printer_name: str = "", modo_papel: str = "",
-                    copias: int = 1) -> bool:
+                    copias: int = 1, width_mm: float = _TICKET_WIDTH_MM,
+                    margin_mm: float = _MARGIN_MM,
+                    reducir: bool = True) -> bool:
     """Imprime el ticket en la impresora indicada (o la predeterminada).
 
     True si se envió a imprimir. False si no hay impresora válida o la
-    seleccionada es un PDF/XPS.
+    seleccionada es un PDF/XPS (salvo en modo de prueba POS_PRINT_TEST=1).
     """
-    printer = _preparar_impresora(printer_name, modo_papel, html, copias)
+    printer = _preparar_impresora(printer_name, modo_papel, html, copias,
+                                  width_mm, margin_mm)
     if printer is None:
         return False
-    return _imprimir_una_pagina(html, printer)
+    return _imprimir_una_pagina(html, printer, reducir)
 
 
 def imprimir_ticket_con_dialogo(html: str, printer_name: str = "",
-                                modo_papel: str = "", copias: int = 1) -> bool:
+                                modo_papel: str = "", copias: int = 1,
+                                width_mm: float = _TICKET_WIDTH_MM,
+                                margin_mm: float = _MARGIN_MM,
+                                reducir: bool = True) -> bool:
     """Imprime mostrando el menú de impresión de Windows (Imprimir/Cancelar).
 
     Devuelve False si el usuario cancela o no hay impresora válida.
     """
     from PyQt6.QtWidgets import QDialog, QPrintDialog
 
-    printer = _preparar_impresora(printer_name, modo_papel, html, copias)
+    printer = _preparar_impresora(printer_name, modo_papel, html, copias,
+                                  width_mm, margin_mm)
     if printer is None:
         return False
     dialog = QPrintDialog(printer)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
-    return _imprimir_una_pagina(html, printer)
+    return _imprimir_una_pagina(html, printer, reducir)
 
 
 def previsualizar_ticket(html: str, printer_name: str = "",
-                         modo_papel: str = "", parent=None) -> bool:
-    """Muestra el visor de vista previa estilo Chrome.
+                         modo_papel: str = "", parent=None, db=None,
+                         html_factory=None,
+                         ajustes: dict | None = None) -> bool:
+    """Muestra el visor de vista previa estilo Chrome (editable).
 
-    Devuelve False solo si no hay ninguna impresora válida para preparar.
+    `html_factory(font_pt, line_spacing, extra)` reconstruye el HTML cuando el
+    usuario cambia la letra o el interlineado. Devuelve False solo si no hay
+    ninguna impresora válida para preparar.
     """
     from ui.ticket_preview import TicketPreviewDialog
 
-    printer = _preparar_impresora(printer_name, modo_papel, html)
+    ajustes = ajustes or (get_ticket_settings(db) if db is not None else {})
+    printer = _preparar_impresora(
+        printer_name, modo_papel, html,
+        width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
+        margin_mm=ajustes.get("margin_mm", _MARGIN_MM))
     if printer is None:
         return False
-    dialog = TicketPreviewDialog(html, printer_name, modo_papel, parent)
+    dialog = TicketPreviewDialog(html, printer_name, modo_papel, parent,
+                                 db=db, html_factory=html_factory,
+                                 ajustes=ajustes)
     dialog.exec()
     return True
 
@@ -626,16 +787,35 @@ def imprimir_ticket_venta(sale, company: dict, db=None,
     """
     name = printer_name or (get_printer_name(db) if db is not None else "")
     modo = get_paper_mode(db) if db is not None else ""
-    html = ticket_html(sale, company, es_reimpresion=es_reimpresion)
+    ajustes = get_ticket_settings(db) if db is not None else {}
+    html = ticket_html(sale, company, es_reimpresion=es_reimpresion,
+                       font_pt=ajustes.get("font_pt", DEFAULT_FONT_PT),
+                       line_spacing=ajustes.get("line_spacing",
+                                                DEFAULT_LINE_SPACING))
     if db is not None and get_show_dialog(db):
-        return imprimir_ticket_con_dialogo(html, name, modo)
-    return imprimir_ticket(html, name, modo)
+        return imprimir_ticket_con_dialogo(
+            html, name, modo,
+            width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
+            margin_mm=ajustes.get("margin_mm", _MARGIN_MM),
+            reducir=ajustes.get("scale_mode", SCALE_FIT) != SCALE_REAL)
+    return imprimir_ticket(
+        html, name, modo,
+        width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
+        margin_mm=ajustes.get("margin_mm", _MARGIN_MM),
+        reducir=ajustes.get("scale_mode", SCALE_FIT) != SCALE_REAL)
 
 
 def imprimir_prueba(printer_name: str = "", db=None) -> bool:
     """Imprime un ticket de prueba. True si se envió a imprimir."""
     modo = get_paper_mode(db) if db is not None else ""
-    return imprimir_ticket(ticket_prueba_html(), printer_name, modo)
+    ajustes = get_ticket_settings(db) if db is not None else {}
+    html = ticket_prueba_html(
+        font_pt=ajustes.get("font_pt", DEFAULT_FONT_PT),
+        line_spacing=ajustes.get("line_spacing", DEFAULT_LINE_SPACING))
+    return imprimir_ticket(
+        html, printer_name, modo,
+        width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
+        margin_mm=ajustes.get("margin_mm", _MARGIN_MM))
 
 
 # ---------- configuración de impresora (app_config) ----------
@@ -672,6 +852,50 @@ def get_paper_mode(db) -> str:
     """Modo de papel del ticket: windows/rollo/etiqueta."""
     modo = _get_config(db, "ticket_paper_mode", PAPER_WINDOWS)
     return modo if modo in PAPER_MODES else PAPER_WINDOWS
+
+
+def _num_config(db, key: str, default: float, minimo: float,
+                maximo: float) -> float:
+    try:
+        valor = float(_get_config(db, key, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimo, min(maximo, valor))
+
+
+def get_ticket_settings(db) -> dict:
+    """Parámetros de impresión del ticket (app_config, con valores por defecto)."""
+    if db is None:
+        return {
+            "font_pt": DEFAULT_FONT_PT,
+            "margin_mm": _MARGIN_MM,
+            "width_mm": _TICKET_WIDTH_MM,
+            "line_spacing": DEFAULT_LINE_SPACING,
+            "scale_mode": SCALE_FIT,
+        }
+    modo = _get_config(db, "ticket_scale_mode", SCALE_FIT)
+    return {
+        "font_pt": _num_config(db, "ticket_font_pt", DEFAULT_FONT_PT, 6, 20),
+        "margin_mm": _num_config(db, "ticket_margin_mm", _MARGIN_MM, 0, 12),
+        "width_mm": _num_config(db, "ticket_width_mm", _TICKET_WIDTH_MM, 40, 112),
+        "line_spacing": _num_config(db, "ticket_line_spacing",
+                                    DEFAULT_LINE_SPACING, 1.0, 2.0),
+        "scale_mode": modo if modo in SCALE_MODES else SCALE_FIT,
+    }
+
+
+def save_ticket_settings(db, font_pt: float = DEFAULT_FONT_PT,
+                         margin_mm: float = _MARGIN_MM,
+                         width_mm: float = _TICKET_WIDTH_MM,
+                         line_spacing: float = DEFAULT_LINE_SPACING,
+                         scale_mode: str = SCALE_FIT) -> None:
+    """Guarda los parámetros de impresión del ticket (app_config)."""
+    _set_config(db, "ticket_font_pt", f"{float(font_pt):.1f}")
+    _set_config(db, "ticket_margin_mm", f"{float(margin_mm):.1f}")
+    _set_config(db, "ticket_width_mm", f"{float(width_mm):.1f}")
+    _set_config(db, "ticket_line_spacing", f"{float(line_spacing):.2f}")
+    _set_config(db, "ticket_scale_mode",
+                scale_mode if scale_mode in SCALE_MODES else SCALE_FIT)
 
 
 def save_paper_mode(db, modo: str) -> None:

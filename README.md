@@ -113,7 +113,10 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
   sin paginado), papel tomado **solo de los tamaños que el driver soporta**
   (se corrigió el bug de `QPrinter.supportedPageSizes`, que no existe en Qt6 y
   causaba 13 páginas/blanco sin fin) con reducción automática si el ticket no
-  cabe. **Facturas A4**: se elige la impresora de hojas en Configuración; si
+  cabe. **Visor editable** (letra 12 pt, márgenes, ancho, interlineado y
+  ajuste) con "Guardar como predeterminado" y **PDF de prueba visible** al
+  imprimir a la impresora virtual (Documentos\PosLaLoma\pruebas).
+  **Facturas A4**: se elige la impresora de hojas en Configuración; si
   solo hay térmica de 80 mm, no se imprime la A4 (se avisa y queda el PDF).
   Cobro: al presionar Enter con un monto insuficiente, el segundo
   método del pago mixto queda **vacío** (COBRAR deshabilitado hasta cubrir el

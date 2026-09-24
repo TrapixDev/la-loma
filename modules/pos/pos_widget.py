@@ -823,11 +823,33 @@ class POSWidget(QWidget):
                                            printer_name=printer_name)
             except Exception:
                 ok = False
-            if not ok:
+            if ok:
+                self._abrir_pdf_de_prueba()
+            else:
                 QMessageBox.information(
                     self, "Impresión",
-                    f"No se pudo imprimir el ticket. El PDF quedó guardado en:\n{documents.get('pdf', '')}")
+                    "No se pudo imprimir el ticket: no hay una impresora de "
+                    "tickets configurada (o la predeterminada es de PDF).\n"
+                    "Elija la impresora en Configuración → Impresora y docs.\n\n"
+                    f"El PDF de la factura quedó guardado en:\n"
+                    f"{documents.get('pdf', '')}")
         return documents
+
+    def _abrir_pdf_de_prueba(self) -> None:
+        """Si se imprimió a la impresora virtual, abre el PDF generado."""
+        try:
+            import os
+
+            from PyQt6.QtCore import QUrl
+            from PyQt6.QtGui import QDesktopServices
+
+            from modules.documentos.ticket import ultima_salida_pdf
+
+            salida = ultima_salida_pdf()
+            if salida and os.path.isfile(salida):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(salida))
+        except Exception:
+            pass
 
     def _create_sale_with_recovery(self, sale: Sale, items: list[SaleItem]) -> int | None:
         """Guarda la venta; ante fallos de red/sesión ofrece recuperación.
