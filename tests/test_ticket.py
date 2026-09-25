@@ -93,7 +93,7 @@ def test_ticket_contiene_datos():
           and "Mesa de roble" in html
           and "150,000" in html
           and "GRACIAS POR SU PREFERENCIA" in html
-          and "CANT" in html and "DETALLE" in html and "SUBTOT" in html
+          and "CANT" in html and "DETALLE" in html and "TOTAL" in html
           and "SON:" in html)
     print(f"[{'OK' if ok else 'FAIL'}] ticket contiene empresa, factura, items y pie")
     assert ok

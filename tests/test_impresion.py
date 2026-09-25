@@ -198,13 +198,17 @@ def test_ticket_formato_referencia():
 
     html = ticket_html(_venta(), dict(EMPRESA_BASE))
     ok = ("CANT" in html and "DETALLE" in html and "PRECIO" in html
-          and "SUBTOT" in html and "IVA" in html
+          and "SUBTOTAL" in html and "IMPUESTOS/IVA" in html
           and "MONTO TOTAL" in html and "SON:" in html
           and "DIECISÉIS MIL NOVECIENTOS CINCUENTA COLONES" in html
           and "PAGA CON SINPE" in html
           and "FACTURA CONTADO" in html)
     print(f"[{'OK' if ok else 'FAIL'}] ticket con formato de la referencia")
     assert ok
+    # Las líneas van en 4 columnas (sin IVA por línea) y los totales usan .rtot
+    cabecera = html.split("<table class=\"lineas\">")[1].split("</tr>")[0]
+    assert cabecera.count("<th") == 4, cabecera
+    assert 'class="rtot"' in html
 
 
 def test_ticket_omite_campos_vacios_y_muestra_extras():
@@ -517,6 +521,34 @@ def test_impresion_a_impresora_virtual_visible():
         Config.PRINT_TEST_PDF = original_pdf
         import shutil
         shutil.rmtree(carpeta, ignore_errors=True)
+
+
+def test_ticket_empresa_logo_y_correo():
+    from modules.documentos.ticket import ticket_html
+
+    empresa = dict(EMPRESA_BASE, email="factura@mb.cr",
+                   logo="logo-colegio.png",
+                   iban="CR880151148200100403501", sinpe="6205-5092")
+    html = ticket_html(_venta(), empresa, font_pt=12.0)
+    ok = ("MB SOLUTIONS CR" in html and "3-101-123456" in html
+          and "Centro Comercial Karim" in html and "6205-5092" in html
+          and "factura@mb.cr" in html
+          and "data:image/png;base64," in html)
+    print(f"[{'OK' if ok else 'FAIL'}] ticket con empresa, correo y logo")
+    assert ok
+
+
+def test_factura_a4_logo_y_correo():
+    from modules.documentos.pdf_factura import factura_html
+
+    company = {"company_name": "MB SOLUTIONS CR", "company_id": "3-101-123456",
+               "phone": "6205-5092", "address": "Centro Comercial Karim",
+               "email": "factura@mb.cr", "logo": "logo-colegio.png"}
+    html = factura_html(_venta(), company)
+    ok = ("MB SOLUTIONS CR" in html and "factura@mb.cr" in html
+          and "data:image/png;base64," in html)
+    print(f"[{'OK' if ok else 'FAIL'}] factura A4 con logo y correo")
+    assert ok
 
 
 def test_empresa_extras_roundtrip():

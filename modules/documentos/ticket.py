@@ -159,20 +159,12 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
     for item in items:
         cantidad = float(item.quantity or 0)
         precio = float(item.unit_price or 0)
-        descuento = float(getattr(item, "discount", 0) or 0)
-        base = max(0.0, cantidad * precio - descuento)
-        impuesto = float(getattr(item, "tax_amount", 0) or 0)
-        if impuesto > 0 and base > 0:
-            tasa = impuesto / base * 100
-        else:
-            tasa = float(getattr(item, "tax_rate", 0) or 0)
         filas.append(
             f'<tr>'
             f'<td class="q">{_fnum(cantidad)}</td>'
             f'<td class="d">{_html_escape(item.product_name)}</td>'
             f'<td class="r">{moneda(precio)}</td>'
             f'<td class="r">{moneda(item.total or 0)}</td>'
-            f'<td class="r">{"-" if is_simplified or tasa <= 0 else f"{tasa:.0f}%"}</td>'
             f'</tr>'
         )
     rows = "\n".join(filas)
@@ -181,7 +173,7 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
     discount_line = ""
     if descuento_total > 0:
         discount_line = (f'<tr><td class="et">DESCUENTO</td>'
-                         f'<td class="r">{moneda(descuento_total)}</td></tr>')
+                         f'<td class="rtot">{moneda(descuento_total)}</td></tr>')
 
     subtotal_val = float(getattr(sale, "subtotal", 0) or 0)
     tax_val = float(getattr(sale, "tax_amount", 0) or 0)
@@ -194,11 +186,11 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
     equiv_line = ""
     if currency == "USD" and rate > 0 and Config.MOSTRAR_EQUIVALENTE_CRC:
         equiv_line = (f'<tr><td class="et">{currency} · Equivalente CRC</td>'
-                      f'<td class="r">{format_currency(float(sale.total), "CRC")}</td></tr>')
+                      f'<td class="rtot">{format_currency(float(sale.total), "CRC")}</td></tr>')
 
     pago_rows = "".join(
         f'<tr><td class="et">{_html_escape(etiqueta)}</td>'
-        f'<td class="r">{monto}</td></tr>'
+        f'<td class="rtot">{monto}</td></tr>'
         for etiqueta, monto in _pagos_ticket(sale, moneda))
 
     son_line = (f'<div class="mini wrap"><b>SON:</b> '
@@ -273,14 +265,15 @@ div {{ line-height: {espaciado:.2f}; }}
 .negrita {{ font-weight: bold; }}
 .wrap {{ word-wrap: break-word; }}
 .linea {{ border-top: 1px dashed #000; margin: 3px 0; }}
-table {{ width: 100%; border-collapse: collapse; }}
+table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
 td {{ padding: 0; vertical-align: top; }}
 th {{ font-size: {base - 1.5:.1f}pt; text-align: left; font-weight: bold; }}
-.q {{ width: 8%; text-align: right; }}
-.d {{ width: 40%; }}
-.r {{ width: 17%; text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
+.q {{ width: 10%; text-align: right; }}
+.d {{ width: 46%; word-wrap: break-word; }}
+.r {{ width: 22%; text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
+.rtot {{ width: 48%; text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
 .et {{ font-weight: bold; }}
-table.lineas td {{ font-size: {base - 1.5:.1f}pt; }}
+table.lineas td {{ font-size: {base - 2:.1f}pt; }}
 .total {{ font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
 .clave {{ font-size: {base - 2:.1f}pt; word-break: break-all; margin-top: 3px; }}
 </style></head><body>
@@ -297,15 +290,15 @@ table.lineas td {{ font-size: {base - 1.5:.1f}pt; }}
 {cliente_html}
 <div class="linea"></div>
 <table class="lineas">
-<tr><th class="q">CANT</th><th class="d">DETALLE</th><th class="r">PRECIO</th><th class="r">SUBTOT</th><th class="r">IVA</th></tr>
+<tr><th class="q">CANT</th><th class="d">DETALLE</th><th class="r">PRECIO</th><th class="r">TOTAL</th></tr>
 {rows}
 </table>
 <div class="linea"></div>
 <table>
-<tr><td class="et">SUBTOTAL</td><td class="r">{moneda(subtotal_val)}</td></tr>
+<tr><td class="et">SUBTOTAL</td><td class="rtot">{moneda(subtotal_val)}</td></tr>
 {discount_line}
-<tr><td class="et">{impuesto_label}</td><td class="r">{impuesto_valor}</td></tr>
-<tr class="total"><td>MONTO TOTAL</td><td class="r">{moneda(float(sale.total))}</td></tr>
+<tr><td class="et">{impuesto_label}</td><td class="rtot">{impuesto_valor}</td></tr>
+<tr class="total"><td>MONTO TOTAL</td><td class="rtot">{moneda(float(sale.total))}</td></tr>
 {equiv_line}
 {pago_rows}
 </table>

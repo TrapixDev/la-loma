@@ -918,10 +918,21 @@ class POSWidget(QWidget):
         return clave, payload
 
     def _load_company_config(self) -> dict:
-        config: dict = {}
+        """Datos de la empresa para el ticket/XML (incluye correo, IBAN, SINPE y logo).
+
+        Usa el mismo cargador que el XML/PDF (`cargar_empresa`), que combina
+        `hacienda_config` con los extras guardados en Configuración → Empresa.
+        """
         db = self.services.get("db")
         if db is None:
-            return config
+            return {}
+        try:
+            from modules.documentos.xml_factura import cargar_empresa
+
+            return cargar_empresa(db)
+        except Exception:
+            pass
+        config: dict = {}
         try:
             rows = db.execute_query("SELECT * FROM hacienda_config WHERE id = 1") or []
             if rows:

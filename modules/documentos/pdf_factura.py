@@ -31,6 +31,19 @@ def factura_html(sale, company: dict, cliente_nombre: str = "") -> str:
         title = "FACTURA ELECTRÓNICA"
     else:
         title = "FACTURA"
+    # Logo de la empresa arriba a la derecha y correo en los datos.
+    logo_html = ""
+    try:
+        from modules.documentos.ticket import _logo_data_uri
+
+        uri = _logo_data_uri(company.get("logo", ""))
+        if uri:
+            logo_html = f'<img src="{uri}" width="120"><br>'
+    except Exception:
+        logo_html = ""
+    email_html = ""
+    if company.get("email"):
+        email_html = f'<br>{_html_escape(company.get("email", ""))}'
     rows = "\n".join(
         '<tr>'
         f'<td align="center">{_fnum(item.quantity)}</td>'
@@ -127,9 +140,11 @@ def factura_html(sale, company: dict, cliente_nombre: str = "") -> str:
       <b>{_html_escape(company.get("company_name", "POS La Loma"))}</b><br>
       {_html_escape(company.get("address", ""))}<br>
       {_html_escape(company.get("phone", ""))} · Cédula {_html_escape(company.get("company_id", ""))}
+      {email_html}
       <br>{_html_escape(company.get("activity_code", ""))}
     </td>
     <td style="text-align:right; vertical-align:top">
+      {logo_html}
       Factura <b>{_html_escape(getattr(sale, 'invoice_number', '') or '')}</b><br>
       {_fecha_corta(getattr(sale, 'created_at', ''))}<br>
       Caja: {_html_escape(getattr(sale, 'station', '') or '')}<br>
