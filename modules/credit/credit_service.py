@@ -151,6 +151,18 @@ class CreditService:
         )
         return [CreditPayment(**row) for row in rows]
 
+    def get_payment(self, payment_id: int) -> CreditPayment | None:
+        """Devuelve un abono por id (para el detalle del movimiento)."""
+        rows = self.db.execute_query(
+            "SELECT cp.*, c.name AS client_name, ca.invoice_number "
+            "FROM credit_payments cp "
+            "JOIN credit_accounts ca ON ca.id = cp.credit_account_id "
+            "JOIN clients c ON c.id = ca.client_id "
+            "WHERE cp.id = ?",
+            (payment_id,),
+        )
+        return CreditPayment(**rows[0]) if rows else None
+
     def _refresh_balance(self, account_id: int) -> None:
         """Recalcula amount_paid y balance de una cuenta."""
         with self.db.transaction() as connection:

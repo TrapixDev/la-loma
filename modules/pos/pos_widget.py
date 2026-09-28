@@ -42,7 +42,7 @@ from utils.helpers import (
     NoWheelComboBox,
 )
 from modules.documentos import generar_documentos
-from modules.documentos.ticket import imprimir_ticket_venta
+from modules.documentos.ticket import get_printer_name, imprimir_ticket_venta
 from modules.documentos.xml_factura import build_factura_payload
 from modules.pos.cobro_dialog import CobroDialog
 from modules.pos.cart_service import CartService
@@ -666,7 +666,8 @@ class POSWidget(QWidget):
 
         dialog = CobroDialog(
             totals["total"], exchange_rate=self._current_exchange_rate(),
-            descuentos=self._descuentos_por_metodo(), parent=self)
+            descuentos=self._descuentos_por_metodo(),
+            default_printer=self._configured_printer(), parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -850,6 +851,13 @@ class POSWidget(QWidget):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(salida))
         except Exception:
             pass
+
+    def _configured_printer(self) -> str:
+        """Impresora de tickets configurada (para preseleccionarla al cobrar)."""
+        db = self.services.get("db")
+        if db is None:
+            return ""
+        return get_printer_name(db)
 
     def _create_sale_with_recovery(self, sale: Sale, items: list[SaleItem]) -> int | None:
         """Guarda la venta; ante fallos de red/sesión ofrece recuperación.

@@ -10,16 +10,13 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPageSize, QPainter, QPixmap, QTextDocument
 from PyQt6.QtPrintSupport import QPrinterInfo
 from PyQt6.QtWidgets import (
-    QComboBox,
     QDialog,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -31,37 +28,62 @@ from modules.documentos.ticket import (
     SCALE_FIT,
     SCALE_MODES,
     SCALE_REAL,
+    GeometriaTicket,
     _MARGIN_MM,
     _TICKET_WIDTH_MM,
     _es_impresora_prueba,
     _preparar_impresora,
     advertencia_papel,
+    dpi_para_impresion,
     escala_necesaria,
+    geometria_ticket,
     imprimir_ticket,
     save_ticket_settings,
     tamanos_soportados,
     ultima_salida_pdf,
 )
 
+from utils.helpers import NoWheelComboBox, NoWheelIntSpinBox, NoWheelSpinBox
+
 _DPI = 150.0
 _PX_POR_MM = _DPI / 25.4
 
 
 def render_ticket(html: str, ancho_mm: float = _TICKET_WIDTH_MM,
-                  margin_mm: float = _MARGIN_MM) -> QPixmap:
-    """Renderiza el ticket completo como una sola página blanca."""
-    ancho_mm = max(20.0, float(ancho_mm or _TICKET_WIDTH_MM))
-    margin_mm = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
-    margen_px = int(round(margin_mm * _PX_POR_MM))
-    ancho_px = max(1, int(round(ancho_mm * _PX_POR_MM)))
+                  margin_mm: float = _MARGIN_MM, *,
+                  geometria: GeometriaTicket | None = None,
+                  dpi: float = _DPI) -> QPixmap:
+    """Renderiza el ticket completo como una sola página blanca.
+
+    Con `geometria` (la de la impresora seleccionada) usa exactamente el
+    mismo ancho útil, margen y resolución que el papel, para que la vista
+    previa no engañe: lo que se ve es lo que sale impreso.
+    """
+    dpi = max(72.0, float(dpi or _DPI))
+    px_mm = dpi / 25.4
+    if geometria is not None:
+        visor_mm = max(20.0, float(geometria.visor_mm))
+        margen_izq_px = int(round(max(0.0, float(geometria.visor_izq_mm)) * px_mm))
+        contenido_px = max(1.0, float(geometria.contenido_mm) * px_mm)
+        margen_sup_px = int(round(
+            max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
+            * px_mm))
+    else:
+        ancho_mm = max(20.0, float(ancho_mm or _TICKET_WIDTH_MM))
+        margin_mm = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
+        visor_mm = ancho_mm
+        margen_izq_px = int(round(margin_mm * px_mm))
+        contenido_px = max(1.0, visor_mm * px_mm - 2 * margen_izq_px)
+        margen_sup_px = margen_izq_px
+    ancho_px = max(1, int(round(visor_mm * px_mm)))
     doc = QTextDocument()
     doc.setHtml(html)
-    doc.setTextWidth(max(1, ancho_px - 2 * margen_px))
-    alto_px = max(1, int(doc.size().height()) + 2 * margen_px)
+    doc.setTextWidth(contenido_px)
+    alto_px = max(1, int(doc.size().height()) + 2 * margen_sup_px)
     imagen = QImage(ancho_px, alto_px, QImage.Format.Format_RGB32)
     imagen.fill(0xFFFFFFFF)
     painter = QPainter(imagen)
-    painter.translate(margen_px, margen_px)
+    painter.translate(margen_izq_px, margen_sup_px)
     doc.drawContents(painter)
     painter.end()
     return QPixmap.fromImage(imagen)
@@ -88,6 +110,8 @@ class TicketPreviewDialog(QDialog):
         self.setMinimumSize(980, 640)
         self._zoom = 1.0
         self._ajustar = True
+        self._geo: GeometriaTicket | None = None
+        self._dpi = _DPI
         self._pagina = render_ticket(self._html, self._width, self._margins)
         self._setup_ui(printer_name, modo_papel)
         self._actualizar_aviso()
@@ -155,7 +179,7 @@ class TicketPreviewDialog(QDialog):
         panel_layout.addWidget(titulo)
 
         panel_layout.addWidget(self._label("Destino:"))
-        self.destino_combo = QComboBox()
+        self.destino_combo = NoWheelComboBox()
         for impresora in QPrinterInfo.availablePrinters():
             self.destino_combo.addItem(impresora.printerName(),
                                        impresora.printerName())
@@ -173,22 +197,20 @@ class TicketPreviewDialog(QDialog):
         col_copias = QVBoxLayout()
         col_copias.setSpacing(2)
         col_copias.addWidget(self._label("Copias:"))
-        self.copias_spin = QSpinBox()
+        self.copias_spin = NoWheelIntSpinBox()
         self.copias_spin.setRange(1, 10)
         self.copias_spin.setValue(1)
-        self.copias_spin.wheelEvent = lambda event: event.ignore()
         col_copias.addWidget(self.copias_spin)
         fila1.addLayout(col_copias, 1)
         col_letra = QVBoxLayout()
         col_letra.setSpacing(2)
         col_letra.addWidget(self._label("Letra:"))
-        self.font_spin = QDoubleSpinBox()
+        self.font_spin = NoWheelSpinBox()
         self.font_spin.setRange(6.0, 20.0)
         self.font_spin.setSingleStep(0.5)
         self.font_spin.setDecimals(1)
         self.font_spin.setSuffix(" pt")
         self.font_spin.setValue(self._font)
-        self.font_spin.wheelEvent = lambda event: event.ignore()
         self.font_spin.valueChanged.connect(self._aplicar_cambios)
         col_letra.addWidget(self.font_spin)
         fila1.addLayout(col_letra, 1)
@@ -199,26 +221,24 @@ class TicketPreviewDialog(QDialog):
         col_margen = QVBoxLayout()
         col_margen.setSpacing(2)
         col_margen.addWidget(self._label("Márgenes:"))
-        self.margin_spin = QDoubleSpinBox()
+        self.margin_spin = NoWheelSpinBox()
         self.margin_spin.setRange(0.0, 12.0)
         self.margin_spin.setSingleStep(0.5)
         self.margin_spin.setDecimals(1)
         self.margin_spin.setSuffix(" mm")
         self.margin_spin.setValue(self._margins)
-        self.margin_spin.wheelEvent = lambda event: event.ignore()
         self.margin_spin.valueChanged.connect(self._aplicar_cambios)
         col_margen.addWidget(self.margin_spin)
         fila2.addLayout(col_margen, 1)
         col_ancho = QVBoxLayout()
         col_ancho.setSpacing(2)
         col_ancho.addWidget(self._label("Ancho:"))
-        self.width_spin = QDoubleSpinBox()
+        self.width_spin = NoWheelSpinBox()
         self.width_spin.setRange(40.0, 112.0)
         self.width_spin.setSingleStep(2.0)
         self.width_spin.setDecimals(0)
         self.width_spin.setSuffix(" mm")
         self.width_spin.setValue(self._width)
-        self.width_spin.wheelEvent = lambda event: event.ignore()
         self.width_spin.valueChanged.connect(self._aplicar_cambios)
         col_ancho.addWidget(self.width_spin)
         fila2.addLayout(col_ancho, 1)
@@ -229,19 +249,18 @@ class TicketPreviewDialog(QDialog):
         col_inter = QVBoxLayout()
         col_inter.setSpacing(2)
         col_inter.addWidget(self._label("Interlineado:"))
-        self.spacing_spin = QDoubleSpinBox()
+        self.spacing_spin = NoWheelSpinBox()
         self.spacing_spin.setRange(1.0, 2.0)
         self.spacing_spin.setSingleStep(0.05)
         self.spacing_spin.setDecimals(2)
         self.spacing_spin.setValue(self._spacing)
-        self.spacing_spin.wheelEvent = lambda event: event.ignore()
         self.spacing_spin.valueChanged.connect(self._aplicar_cambios)
         col_inter.addWidget(self.spacing_spin)
         fila3.addLayout(col_inter, 1)
         col_ajuste = QVBoxLayout()
         col_ajuste.setSpacing(2)
         col_ajuste.addWidget(self._label("Ajuste:"))
-        self.scale_combo = QComboBox()
+        self.scale_combo = NoWheelComboBox()
         for clave, etiqueta in SCALE_MODES.items():
             self.scale_combo.addItem(etiqueta, clave)
         indice = self.scale_combo.findData(self._scale_mode)
@@ -253,7 +272,7 @@ class TicketPreviewDialog(QDialog):
         panel_layout.addLayout(fila3)
 
         panel_layout.addWidget(self._label("Papel del ticket:"))
-        self.papel_combo = QComboBox()
+        self.papel_combo = NoWheelComboBox()
         for clave, etiqueta in PAPER_MODES.items():
             self.papel_combo.addItem(etiqueta, clave)
         indice = self.papel_combo.findData(modo_papel or "windows")
@@ -346,7 +365,8 @@ class TicketPreviewDialog(QDialog):
                 self._html = self._factory(self._font, self._spacing)
             except Exception:
                 pass
-        self._pagina = render_ticket(self._html, self._width, self._margins)
+        self._pagina = render_ticket(self._html, self._width, self._margins,
+                                     geometria=self._geo, dpi=self._dpi)
         self._ajustar = True
         self._ajustar_ancho()
         self._actualizar_aviso()
@@ -367,12 +387,32 @@ class TicketPreviewDialog(QDialog):
 
     # ---------- impresión ----------
 
+    def _sincronizar_geometria(self, printer) -> GeometriaTicket | None:
+        """Re-renderiza la tira con la geometría real del driver elegido.
+
+        Así el margen y el ancho de la pantalla son los que saldrán en el
+        papel (papel angosto, márgenes físicos, área imprimible del driver).
+        """
+        geo = (geometria_ticket(printer, self._width, self._margins)
+               if printer is not None else None)
+        dpi = dpi_para_impresion(printer)
+        if geo == self._geo and dpi == self._dpi:
+            return geo
+        self._geo = geo
+        self._dpi = dpi
+        self._pagina = render_ticket(self._html, self._width, self._margins,
+                                     geometria=geo, dpi=dpi)
+        self._ajustar = True
+        self._ajustar_ancho()
+        return geo
+
     def _actualizar_aviso(self) -> None:
         destino = self.destino_combo.currentData() or ""
         modo = self.papel_combo.currentData() or ""
         printer = _preparar_impresora(destino, modo, self._html,
                                       width_mm=self._width,
                                       margin_mm=self._margins)
+        geo = self._sincronizar_geometria(printer)
         if printer is None:
             self.imprimir_btn.setEnabled(False)
             self.papel_label.setText("")
@@ -384,8 +424,11 @@ class TicketPreviewDialog(QDialog):
         self.imprimir_btn.setEnabled(True)
         pagina = printer.pageLayout().pageSize()
         mm = pagina.size(QPageSize.Unit.Millimeter)
-        escala = escala_necesaria(printer, self._html)
+        escala = escala_necesaria(printer, self._html,
+                                  self._width, self._margins)
         detalle = f"Papel: {pagina.name()} ({mm.width():.0f}×{mm.height():.0f} mm)"
+        if geo is not None:
+            detalle += f" · contenido {geo.contenido_mm:.1f} mm"
         if escala < 1.0:
             if self._scale_mode == SCALE_REAL:
                 detalle += " · tamaño real (puede cortarse)"
@@ -394,7 +437,8 @@ class TicketPreviewDialog(QDialog):
         if _es_impresora_prueba(destino):
             detalle += " · se guarda un PDF de prueba (Documentos\\PosLaLoma\\pruebas)"
         self.papel_label.setText(detalle)
-        aviso = advertencia_papel(printer, self._html)
+        aviso = advertencia_papel(printer, self._html,
+                                  self._width, self._margins)
         if aviso and self._scale_mode == SCALE_REAL:
             aviso = ("El ticket es más largo que el papel y está en «Tamaño "
                      "real»: puede cortarse. Elija «Ajustar al papel» o un "
@@ -419,9 +463,14 @@ class TicketPreviewDialog(QDialog):
         if printer is not None:
             pagina = printer.pageLayout().pageSize()
             mm = pagina.size(QPageSize.Unit.Millimeter)
-            escala = escala_necesaria(printer, self._html)
+            escala = escala_necesaria(printer, self._html,
+                                      self._width, self._margins)
+            geo = geometria_ticket(printer, self._width, self._margins)
             lineas.append(f"Papel usado: {pagina.name()} "
                           f"({mm.width():.1f} x {mm.height():.1f} mm)")
+            lineas.append(
+                f"Ancho útil real: {geo.contenido_mm:.1f} mm "
+                f"(área de dibujo {geo.dispositivo_mm:.1f} mm)")
             lineas.append(f"Alto del contenido: {escala * 100:.0f}% de la página")
         tamanos = tamanos_soportados(destino)
         lineas.append(f"Tamaños soportados ({len(tamanos)}):")

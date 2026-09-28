@@ -8,7 +8,6 @@ from .factura_service import (
 from .ticket import (
     PAPER_LABEL,
     PAPER_MODES,
-    PAPER_ROLL,
     PAPER_WINDOWS,
     elegir_papel,
     get_paper_mode,
@@ -43,7 +42,6 @@ __all__ = [
     "get_show_dialog",
     "save_show_dialog",
     "PAPER_WINDOWS",
-    "PAPER_ROLL",
     "PAPER_LABEL",
     "PAPER_MODES",
 ]

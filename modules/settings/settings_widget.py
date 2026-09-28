@@ -5,7 +5,6 @@ from PyQt6.QtPrintSupport import QPrinterInfo
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -331,7 +330,6 @@ class SettingsWidget(QWidget):
             self.paper_combo.addItem(etiqueta, clave)
         self.paper_combo.setToolTip(
             "Windows: usa el papel ya configurado en el driver.\n"
-            "Rollo continuo: elige el papel largo de 80mm.\n"
             "Etiqueta: imprime todo el ticket en una etiqueta.")
 
         self.print_dialog_check = QCheckBox(
@@ -353,6 +351,13 @@ class SettingsWidget(QWidget):
         test_printer_button.setObjectName("primaryButton")
         test_printer_button.clicked.connect(self._test_printer)
 
+        format_button = QPushButton("Formato del ticket…")
+        format_button.setObjectName("secondaryButton")
+        format_button.setToolTip(
+            "Diseñá el tiquete de 80 mm (bloques, textos, letra y papel) con "
+            "vista previa en vivo.")
+        format_button.clicked.connect(self._open_ticket_format_dialog)
+
         test_a4_button = QPushButton("Probar factura A4")
         test_a4_button.setObjectName("secondaryButton")
         test_a4_button.setToolTip(
@@ -367,6 +372,7 @@ class SettingsWidget(QWidget):
         printer_form.addRow(self._label("Impresora para facturas A4:"), self.a4_combo)
         printer_form.addRow("", self.print_dialog_check)
         printer_form.addRow("", test_printer_button)
+        printer_form.addRow("", format_button)
         printer_form.addRow("", test_a4_button)
         printer_form.addRow("", printer_hint)
         printer_page_layout.addWidget(printer_group)
@@ -534,6 +540,7 @@ class SettingsWidget(QWidget):
     def _load_config(self) -> None:
         self._refresh_promotions()
         db = self.services.get("db")
+        config_applied = False
         if db is not None:
             try:
                 rows = db.execute_query("SELECT * FROM hacienda_config WHERE id = 1") or []
@@ -541,10 +548,10 @@ class SettingsWidget(QWidget):
                     row = {str(key): value for key, value in rows[0].items()}
                     config = {key: row.get(column, "") for key, column in COLUMN_MAP.items()}
                     self._apply_config(config)
-                    return
+                    config_applied = True
             except Exception:
                 pass
-        if self.memory_config:
+        if not config_applied and self.memory_config:
             self._apply_config(self.memory_config)
 
     def _save(self) -> None:
@@ -607,7 +614,7 @@ class SettingsWidget(QWidget):
             pass
 
     def _save_extras(self) -> None:
-        """Guarda la configuración de impresora y los extras de empresa."""
+        """Guarda impresora, papel, A4 y datos extra de empresa."""
         self._save_printer()
         self._save_empresa_extra()
 
@@ -855,6 +862,37 @@ class SettingsWidget(QWidget):
                 self.a4_combo.setCurrentIndex(index)
         except Exception:
             pass
+
+    def _empresa_actual(self) -> dict:
+        """Datos de empresa en pantalla, para la muestra del formato."""
+        return {
+            "company_name": self.company_name_input.text().strip(),
+            "company_id": self.company_id_input.text().strip(),
+            "phone": self.phone_input.text().strip(),
+            "address": self.address_input.text().strip(),
+            "activity_code": self.activity_input.text().strip(),
+            "email": self.email_input.text().strip(),
+            "iban": self.iban_input.text().strip(),
+            "sinpe": self.sinpe_input.text().strip(),
+            "logo": self.logo_input.text().strip(),
+        }
+
+    def _crear_ticket_format_dialog(self):
+        """Crea (sin abrir) el editor del formato con lo elegido en esta pestaña."""
+        from modules.documentos.ticket import get_paper_mode
+        from modules.settings.ticket_format_dialog import TicketFormatDialog
+
+        db = self.services.get("db")
+        modo = self.paper_combo.currentData() or (
+            get_paper_mode(db) if db is not None else "")
+        return TicketFormatDialog(
+            self.services, company=self._empresa_actual(),
+            printer_name=self.printer_combo.currentData() or "",
+            paper_mode=modo, parent=self)
+
+    def _open_ticket_format_dialog(self, _checked: bool = False) -> None:
+        """Abre el editor visual del tiquete (ventana emergente)."""
+        self._crear_ticket_format_dialog().exec()
 
     def _test_printer(self) -> None:
         """Abre la vista previa del ticket de prueba (imprimir o cerrar)."""

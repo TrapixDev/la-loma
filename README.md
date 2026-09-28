@@ -55,6 +55,18 @@ mode = server                            ; server | local (pruebas)
 
 ## Ejecutar desde el código (desarrollo)
 
+En Windows, la forma más rápida en otra PC (por ejemplo, la del trabajo):
+
+1. Copie la carpeta del proyecto.
+2. Ejecute **`instalar_dependencias.bat`** → instala PyQt6 y requests, verifica
+   y corre la autocomprobación (`instalar_dependencias.bat dev` agrega tests y
+   empaquetado). Si no hay Python, el propio .bat indica de dónde bajarlo.
+3. Ejecute **`iniciar_pos.bat`** para abrir el POS (y `iniciar_pos.bat --server`
+   para el servidor central). Si algo falla, la ventana queda abierta con el
+   error y la ruta del log.
+
+También a mano:
+
 ```
 python -m pip install -r requirements.txt
 python main.py            # estación (levanta el servidor local automáticamente)

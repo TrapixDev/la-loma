@@ -19,11 +19,16 @@ from config import Config
 from database.db_manager import DatabaseManager
 from database.models import Sale, SaleItem
 from modules.documentos.ticket import (
+    TICKET_FORMAT_DEFAULTS,
     ticket_html,
     imprimir_ticket,
+    imprimir_ticket_venta,
     imprimir_prueba,
     get_printer_name,
     save_printer_name,
+    get_ticket_format,
+    save_ticket_format,
+    save_show_dialog,
     _desglose_pago,
 )
 
@@ -91,6 +96,7 @@ def test_ticket_contiene_datos():
     ok = ("Muebleria La Loma" in html
           and "V-00001" in html
           and "Mesa de roble" in html
+          and "Actividad económica: 31021" in html
           and "150,000" in html
           and "GRACIAS POR SU PREFERENCIA" in html
           and "CANT" in html and "DETALLE" in html and "TOTAL" in html
@@ -137,6 +143,153 @@ def test_ticket_clave_hacienda():
     ok = "CLAVE:" in html and "1234567890123" in html
     print(f"[{'OK' if ok else 'FAIL'}] ticket incluye clave de Hacienda")
     assert ok
+
+
+def test_ticket_detalle_legible_en_lineas_separadas():
+    html = ticket_html(make_sale(), COMPANY)
+
+    assert '<div class="item-name">Mesa de roble</div>' in html
+    assert '<table class="item-meta"' in html
+    assert 'width="64%"' in html and 'width="36%"' in html
+    assert "2 × ₡75,000.00" in html
+    assert "₡150,000.00" in html
+    assert '<table class="lineas">' not in html
+
+
+def test_ticket_formato_personaliza_bloques_y_textos():
+    formato = {
+        **TICKET_FORMAT_DEFAULTS,
+        "show_company_name": False,
+        "show_email": False,
+        "show_customer": False,
+        "show_hacienda_key": False,
+        "show_transfer_details": False,
+        "show_payments": False,
+        "show_amount_words": False,
+        "show_status": False,
+        "show_thank_you": False,
+        "footer_text": "Gracias <de parte de La Loma> & vuelva pronto",
+    }
+    empresa = dict(COMPANY, email="factura@laloma.cr",
+                   iban="CR880151148200100403501", sinpe="8888-8888")
+    html = ticket_html(make_sale(clave="CLAVE-DE-PRUEBA"), empresa,
+                       formato=formato)
+
+    assert "Muebleria La Loma" not in html
+    assert "factura@laloma.cr" not in html
+    assert "CLIENTE:" not in html
+    assert "CLAVE:" not in html
+    assert "IBAN:" not in html and "SINPE MÓVIL:" not in html
+    assert "PAGA CON EFECTIVO" not in html
+    assert "SON:" not in html
+    assert "GRACIAS POR SU PREFERENCIA" not in html
+    assert "Comprobante electrónico:" not in html
+    assert "Gracias &lt;de parte de La Loma&gt; &amp; vuelva pronto" in html
+
+
+def test_ticket_formato_guardado_y_valores_invalidos_normalizados():
+    cleanup()
+    db = DatabaseManager(TEST_DB)
+    db.initialize()
+    try:
+        assert get_ticket_format(db) == TICKET_FORMAT_DEFAULTS
+        save_ticket_format(db, {
+            "show_email": False,
+            "logo_width_px": 9999,
+            "thank_you_text": "  Gracias por comprar  ",
+            "campo_desconocido": "ignorar",
+        })
+        formato = get_ticket_format(db)
+        assert formato["show_email"] is False
+        assert formato["logo_width_px"] == 240
+        assert formato["thank_you_text"] == "Gracias por comprar"
+        assert "campo_desconocido" not in formato
+
+        db.execute_update(
+            "INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+            ("ticket_format", "{json roto"),
+        )
+        assert get_ticket_format(db) == TICKET_FORMAT_DEFAULTS
+    finally:
+        db.close()
+        cleanup()
+
+
+def test_venta_imprime_con_el_formato_guardado(monkeypatch):
+    cleanup()
+    db = DatabaseManager(TEST_DB)
+    db.initialize()
+    captured = {}
+
+    def fake_print(html, *args, **kwargs):
+        captured["html"] = html
+        return True
+
+    try:
+        save_ticket_format(db, {
+            **TICKET_FORMAT_DEFAULTS,
+            "show_email": False,
+            "thank_you_text": "FORMATO GUARDADO",
+        })
+        monkeypatch.setattr("modules.documentos.ticket.imprimir_ticket", fake_print)
+        assert imprimir_ticket_venta(
+            make_sale(), dict(COMPANY, email="factura@laloma.cr"), db)
+        assert "factura@laloma.cr" not in captured["html"]
+        assert "FORMATO GUARDADO" in captured["html"]
+    finally:
+        db.close()
+        cleanup()
+
+
+def test_impresora_virtual_omite_el_dialogo_de_windows(monkeypatch):
+    """Con POS-Test no debe abrirse el menú de Windows: el PDF ya tiene
+    destino fijo y el diálogo podría desviar la salida."""
+    cleanup()
+    db = DatabaseManager(TEST_DB)
+    db.initialize()
+    llamadas = {}
+
+    def no_dialogo(*_args, **_kwargs):
+        raise AssertionError("no debe abrirse el menú de impresión")
+
+    def fake_print(html, *args, **kwargs):
+        llamadas["html"] = html
+        return True
+
+    try:
+        save_show_dialog(db, True)
+        monkeypatch.setattr(
+            "modules.documentos.ticket._sera_impresora_prueba",
+            lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            "modules.documentos.ticket.imprimir_ticket_con_dialogo", no_dialogo)
+        monkeypatch.setattr(
+            "modules.documentos.ticket.imprimir_ticket", fake_print)
+        assert imprimir_ticket_venta(make_sale(), COMPANY, db,
+                                     printer_name="POS-Test")
+        assert llamadas, "el ticket no se mandó a imprimir"
+    finally:
+        db.close()
+        cleanup()
+
+
+def test_sera_impresora_prueba_detecta_destinos_virtuales(monkeypatch):
+    from modules.documentos import ticket as modulo
+
+    monkeypatch.setattr(modulo, "resolver_impresora", lambda *_: "POS-Test")
+    assert modulo._sera_impresora_prueba("POS-Test") is True
+
+    monkeypatch.setattr(modulo, "resolver_impresora",
+                        lambda *_: "Microsoft Print to PDF")
+    monkeypatch.setattr(modulo, "_impresora_prueba_instalada", lambda: "POS-Test")
+    assert modulo._sera_impresora_prueba("Microsoft Print to PDF") is True
+
+    monkeypatch.setattr(modulo, "_impresora_prueba_instalada", lambda: "")
+    monkeypatch.setattr(modulo.Config, "PRINT_TEST_MODE", False)
+    assert modulo._sera_impresora_prueba("Microsoft Print to PDF") is False
+
+    monkeypatch.setattr(modulo, "resolver_impresora", lambda *_: "")
+    assert modulo._sera_impresora_prueba("") is False
 
 
 def test_desglose_mixto():

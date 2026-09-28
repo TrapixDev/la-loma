@@ -9,6 +9,7 @@ import base64
 import json as _json
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from PyQt6.QtCore import QMarginsF, QSizeF
 from PyQt6.QtGui import QPageLayout, QPageSize, QPainter, QTextDocument
@@ -19,7 +20,7 @@ from utils.helpers import format_currency, monto_en_letras
 
 _TICKET_WIDTH_MM = 80.0
 _MARGIN_MM = 3.0
-# Predeterminados de impresión (editables en el visor y guardados por caja).
+# Ajustes de impresión editables desde el editor o el visor y guardados en BD.
 DEFAULT_FONT_PT = 12.0
 DEFAULT_LINE_SPACING = 1.35
 SCALE_FIT = "ajustar"
@@ -28,6 +29,64 @@ SCALE_MODES = {
     SCALE_FIT: "Ajustar al papel",
     SCALE_REAL: "Tamaño real (sin reducir)",
 }
+
+TICKET_FORMAT_DEFAULTS = {
+    "show_logo": True,
+    "show_company_name": True,
+    "show_company_id": True,
+    "show_address": True,
+    "show_phone": True,
+    "show_email": True,
+    "show_activity": True,
+    "show_customer": True,
+    "show_hacienda_key": True,
+    "show_transfer_details": True,
+    "show_payments": True,
+    "show_amount_words": True,
+    "show_equivalent_crc": True,
+    "show_status": True,
+    "show_thank_you": True,
+    "logo_width_px": 128,
+    "thank_you_text": "GRACIAS POR SU PREFERENCIA",
+    "footer_text": "",
+}
+
+_FORMAT_BOOLEAN_KEYS = tuple(
+    key for key, value in TICKET_FORMAT_DEFAULTS.items()
+    if isinstance(value, bool))
+
+
+def normalizar_formato_ticket(formato: dict | None = None) -> dict:
+    """Completa y valida las opciones guardadas para el diseño del tiquete."""
+    valores = dict(TICKET_FORMAT_DEFAULTS)
+    if not isinstance(formato, dict):
+        return valores
+
+    for key in _FORMAT_BOOLEAN_KEYS:
+        if key not in formato:
+            continue
+        value = formato[key]
+        if isinstance(value, bool):
+            valores[key] = value
+        elif isinstance(value, (int, float)):
+            valores[key] = value != 0
+        elif isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"1", "true", "yes", "si", "sí", "on"}:
+                valores[key] = True
+            elif text in {"0", "false", "no", "off", ""}:
+                valores[key] = False
+
+    try:
+        valores["logo_width_px"] = max(
+            48, min(240, int(round(float(formato.get("logo_width_px", 128))))))
+    except (TypeError, ValueError, OverflowError):
+        pass
+
+    for key, limite in (("thank_you_text", 100), ("footer_text", 160)):
+        value = formato.get(key, valores[key])
+        valores[key] = str(value or "").strip()[:limite]
+    return valores
 
 
 # ---------- helpers ----------
@@ -133,8 +192,15 @@ def _pagos_ticket(sale, moneda) -> list[tuple[str, str]]:
 
 def ticket_html(sale, company: dict, es_reimpresion: bool = False,
                 font_pt: float = DEFAULT_FONT_PT,
-                line_spacing: float = DEFAULT_LINE_SPACING) -> str:
-    """HTML compacto del ticket térmico (80mm) para una venta guardada."""
+                line_spacing: float = DEFAULT_LINE_SPACING,
+                formato: dict | None = None) -> str:
+    """HTML legible del tiquete térmico para una venta guardada.
+
+    Los productos se presentan en bloques de dos líneas en lugar de cuatro
+    columnas estrechas, que se pegaban entre sí en algunos drivers de 80 mm.
+    """
+    company = company or {}
+    opciones = normalizar_formato_ticket(formato)
     items = sale.items or []
     currency = str(getattr(sale, "currency", "CRC") or "CRC")
     rate = float(getattr(sale, "exchange_rate", 0) or 0)
@@ -144,6 +210,13 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
 
     def moneda(valor: float) -> str:
         return format_currency(float(valor or 0) * factor, currency)
+
+    def fila_total(etiqueta: str, valor: str,
+                   clase_etiqueta: str = "et") -> str:
+        """Fila de totales con anchos en atributos: Qt ignora los width en CSS
+        y las columnas se pegaban (label y monto sin separación)."""
+        return (f'<tr><td class="{clase_etiqueta}" width="52%">{etiqueta}</td>'
+                f'<td class="rtot" width="48%" align="right">{valor}</td></tr>')
 
     is_simplified = getattr(sale, "invoice_type", "general") == "simplificada"
     es_credito = str(getattr(sale, "payment_method", "") or "").lower() == "credito"
@@ -157,23 +230,24 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
 
     filas = []
     for item in items:
-        cantidad = float(item.quantity or 0)
-        precio = float(item.unit_price or 0)
+        cantidad = _fnum(item.quantity)
+        precio = moneda(item.unit_price)
+        descripcion = _html_escape(item.product_name or "Artículo")
         filas.append(
-            f'<tr>'
-            f'<td class="q">{_fnum(cantidad)}</td>'
-            f'<td class="d">{_html_escape(item.product_name)}</td>'
-            f'<td class="r">{moneda(precio)}</td>'
-            f'<td class="r">{moneda(item.total or 0)}</td>'
-            f'</tr>'
+            '<div class="item">'
+            f'<div class="item-name">{descripcion}</div>'
+            '<table class="item-meta" width="100%"><tr>'
+            f'<td class="item-unit" width="64%">{cantidad} × {precio}</td>'
+            f'<td class="item-total" width="36%" align="right">'
+            f'{moneda(item.total or 0)}</td>'
+            '</tr></table></div>'
         )
     rows = "\n".join(filas)
 
     descuento_total = float(getattr(sale, "discount", 0) or 0)
     discount_line = ""
     if descuento_total > 0:
-        discount_line = (f'<tr><td class="et">DESCUENTO</td>'
-                         f'<td class="rtot">{moneda(descuento_total)}</td></tr>')
+        discount_line = fila_total("DESCUENTO", moneda(descuento_total))
 
     subtotal_val = float(getattr(sale, "subtotal", 0) or 0)
     tax_val = float(getattr(sale, "tax_amount", 0) or 0)
@@ -184,56 +258,82 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
     impuesto_valor = "" if is_simplified else moneda(tax_val)
 
     equiv_line = ""
-    if currency == "USD" and rate > 0 and Config.MOSTRAR_EQUIVALENTE_CRC:
-        equiv_line = (f'<tr><td class="et">{currency} · Equivalente CRC</td>'
-                      f'<td class="rtot">{format_currency(float(sale.total), "CRC")}</td></tr>')
+    if (opciones["show_equivalent_crc"] and currency == "USD" and rate > 0
+            and Config.MOSTRAR_EQUIVALENTE_CRC):
+        equiv_line = fila_total(
+            f"{currency} · Equivalente CRC",
+            format_currency(float(sale.total), "CRC"))
 
-    pago_rows = "".join(
-        f'<tr><td class="et">{_html_escape(etiqueta)}</td>'
-        f'<td class="rtot">{monto}</td></tr>'
-        for etiqueta, monto in _pagos_ticket(sale, moneda))
+    pago_rows = ""
+    if opciones["show_payments"]:
+        pago_rows = "".join(
+            fila_total(_html_escape(etiqueta), monto)
+            for etiqueta, monto in _pagos_ticket(sale, moneda))
 
-    son_line = (f'<div class="mini wrap"><b>SON:</b> '
-                f'{_html_escape(monto_en_letras(float(sale.total) * factor, currency))}'
-                f'</div>')
+    son_line = ""
+    if opciones["show_amount_words"]:
+        son_line = (f'<div class="mini wrap son"><b>SON:</b> '
+                    f'{_html_escape(monto_en_letras(float(sale.total) * factor, currency))}'
+                    f'</div>')
 
     nombre_cliente = getattr(sale, "client_name", "") or "Consumidor Final"
     cliente_html = ""
-    if not is_simplified:
-        cliente_html = (f'<div>CLIENTE: <b>{_html_escape(nombre_cliente)}</b></div>')
-    else:
-        cliente_html = '<div>CLIENTE: Cliente General</div>'
+    if opciones["show_customer"]:
+        if is_simplified:
+            nombre_cliente = "Cliente General"
+        cliente_html = (
+            '<div class="cliente"><b>CLIENTE</b><br>'
+            f'{_html_escape(nombre_cliente)}</div>')
 
     clave_html = ""
-    if not is_simplified:
+    if opciones["show_hacienda_key"] and not is_simplified:
         clave = str(getattr(sale, "hacienda_key", "") or "")
         if clave:
-            clave_html = f'<div class="clave">CLAVE: {_html_escape(clave)}</div>'
-    else:
-        clave_html = ('<div class="clave">Régimen de Tributación '
-                      'Simplificada (sin clave)</div>')
+            clave_html = f'<div class="clave"><b>CLAVE:</b> {_html_escape(clave)}</div>'
 
-    logo_uri = _logo_data_uri(company.get("logo", ""))
-    logo_html = (f'<div class="centro"><img src="{logo_uri}" width="128"></div>'
-                 if logo_uri else "")
+    logo_uri = _logo_data_uri(company.get("logo", "")) if opciones["show_logo"] else ""
+    logo_html = (
+        f'<div class="centro logo"><img src="{logo_uri}" '
+        f'width="{opciones["logo_width_px"]}"></div>' if logo_uri else "")
 
     empresa_lineas = []
-    if company.get("address"):
+    if opciones["show_address"] and company.get("address"):
         empresa_lineas.append(_html_escape(company.get("address", "")))
     contacto = []
-    if company.get("phone"):
+    if opciones["show_phone"] and company.get("phone"):
         contacto.append(f'Tel: {_html_escape(company.get("phone", ""))}')
-    if company.get("email"):
+    if opciones["show_email"] and company.get("email"):
         contacto.append(_html_escape(company.get("email", "")))
     if contacto:
         empresa_lineas.append(" · ".join(contacto))
-    if company.get("company_id"):
+    if opciones["show_company_id"] and company.get("company_id"):
         empresa_lineas.append(f'Céd. jurídica: {_html_escape(company.get("company_id", ""))}')
+    if opciones["show_activity"] and company.get("activity_code"):
+        empresa_lineas.append(
+            f'Actividad económica: {_html_escape(company.get("activity_code", ""))}')
+    nombre_empresa = ""
+    if opciones["show_company_name"]:
+        nombre_empresa = _html_escape(company.get("company_name") or "POS La Loma")
     empresa_html = "".join(
-        f'<div class="centro mini">{linea}</div>' for linea in empresa_lineas)
+        f'<div class="centro mini empresa-linea">{linea}</div>'
+        for linea in empresa_lineas)
+
+    def dato_html(etiqueta: str, valor: str) -> str:
+        valor = str(valor or "").strip()
+        if not valor:
+            return ""
+        return (f'<tr><td class="dato-label" width="32%">{etiqueta}</td>'
+                f'<td class="dato-value" width="68%">{_html_escape(valor)}</td></tr>')
+
+    datos_html = "".join((
+        dato_html("Factura", getattr(sale, "invoice_number", "")),
+        dato_html("Fecha", _fecha_corta(getattr(sale, "created_at", ""))),
+        dato_html("Caja", getattr(sale, "station", "")),
+        dato_html("Cajero", getattr(sale, "user_name", "")),
+    ))
 
     banco_html = ""
-    if company.get("iban") or company.get("sinpe"):
+    if opciones["show_transfer_details"] and (company.get("iban") or company.get("sinpe")):
         filas_banco = ['<div class="centro mini negrita">PARA TRANSFERENCIA O DEPÓSITO:</div>']
         if company.get("iban"):
             filas_banco.append(
@@ -244,69 +344,89 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
                 f'{_html_escape(company.get("sinpe", ""))}</div>')
         banco_html = "".join(filas_banco)
 
-    if is_simplified:
-        estado_html = "Régimen de Tributación Simplificada"
-    else:
-        estado = str(getattr(sale, "hacienda_status", "") or "").upper() or "ENVIADA"
-        estado_html = f"Comprobante electrónico: {estado}"
+    estado_html = ""
+    if opciones["show_status"]:
+        if is_simplified:
+            estado_html = (
+                "Régimen de Tributación Simplificada — "
+                "sin crédito fiscal de IVA")
+        else:
+            estado = str(getattr(sale, "hacienda_status", "") or "").upper() or "ENVIADA"
+            estado_html = f"Comprobante electrónico: {estado}"
 
     reimpresion_html = ('<div class="centro negrita">*** REIMPRESIÓN ***</div>'
                         if es_reimpresion else "")
 
-    fecha = _fecha_corta(getattr(sale, "created_at", ""))
+    gracias_html = ""
+    if opciones["show_thank_you"] and opciones["thank_you_text"]:
+        gracias_html = (
+            f'<div class="centro negrita gracias">'
+            f'{_html_escape(opciones["thank_you_text"])}</div>')
+    pie_personalizado = _html_escape(opciones["footer_text"]).replace("\n", "<br>")
+    pie_html = f'<div class="centro mini pie">{pie_personalizado}</div>' if pie_personalizado else ""
+
     base = max(6.0, min(20.0, float(font_pt or DEFAULT_FONT_PT)))
     espaciado = max(1.0, min(2.0, float(line_spacing or DEFAULT_LINE_SPACING)))
     return f"""<html><head><style>
-body {{ font-family: 'Courier New', monospace; font-size: {base:.1f}pt; color: #000; margin: 0; }}
+body {{ font-family: Arial, 'Segoe UI', sans-serif; font-size: {base:.1f}pt; color: #000; margin: 0; }}
 div {{ line-height: {espaciado:.2f}; }}
 .centro {{ text-align: center; }}
-.nombre {{ font-weight: bold; font-size: {base + 1.5:.1f}pt; }}
+.nombre {{ font-weight: bold; font-size: {base + 2:.1f}pt; margin-bottom: 2px; }}
 .mini {{ font-size: {base - 1:.1f}pt; }}
 .negrita {{ font-weight: bold; }}
 .wrap {{ word-wrap: break-word; }}
-.linea {{ border-top: 1px dashed #000; margin: 3px 0; }}
-table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
-td {{ padding: 0; vertical-align: top; }}
-th {{ font-size: {base - 1.5:.1f}pt; text-align: left; font-weight: bold; }}
-.q {{ width: 10%; text-align: right; }}
-.d {{ width: 46%; word-wrap: break-word; }}
-.r {{ width: 22%; text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
-.rtot {{ width: 48%; text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
+.logo {{ margin-bottom: 3px; }}
+.empresa-linea {{ margin: 1px 0; }}
+.linea {{ border-top: 1px dashed #555; margin: 5px 0; }}
+.titulo {{ font-weight: bold; font-size: {base + 1:.1f}pt; text-align: center; margin: 4px 0; }}
+table {{ width: 100%; border-collapse: collapse; }}
+td {{ padding: 1px 0; vertical-align: top; }}
+table.datos td {{ padding: 1px 0; }}
+.dato-label {{ font-weight: bold; }}
+.dato-value {{ word-wrap: break-word; }}
+.cliente {{ border-top: 1px solid #888; border-bottom: 1px solid #888; padding: 4px 0; margin: 4px 0; }}
+.clave {{ font-size: {base - 2:.1f}pt; word-wrap: break-word; margin: 3px 0; }}
+.section-title {{ font-weight: bold; margin: 4px 0 2px; }}
+.item-header td {{ border-top: 1px solid #555; border-bottom: 1px solid #555; padding: 3px 0; font-size: {base - 2:.1f}pt; font-weight: bold; }}
+.item {{ border-bottom: 1px dotted #999; padding: 3px 0; }}
+.item-name {{ font-weight: bold; word-wrap: break-word; }}
+.item-meta td {{ padding: 1px 0; font-size: {base - 1:.1f}pt; }}
+.item-unit {{ word-wrap: break-word; }}
+.item-total {{ text-align: right; white-space: nowrap; font-weight: bold; }}
+table.totales {{ margin-top: 3px; }}
+table.totales td {{ padding: 2px 0; }}
+.rtot {{ text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
 .et {{ font-weight: bold; }}
-table.lineas td {{ font-size: {base - 2:.1f}pt; }}
-.total {{ font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
-.clave {{ font-size: {base - 2:.1f}pt; word-break: break-all; margin-top: 3px; }}
+.total td {{ border-top: 1px solid #555; padding-top: 4px; font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
+.son {{ margin: 4px 0; }}
+.gracias {{ margin: 5px 0 3px; }}
+.pie {{ margin-top: 2px; }}
 </style></head><body>
 {logo_html}
-<div class="centro nombre">{_html_escape(company.get("company_name", "POS La Loma"))}</div>
+{f'<div class="centro nombre">{nombre_empresa}</div>' if nombre_empresa else ''}
 {empresa_html}
 <div class="linea"></div>
-<div class="centro negrita">{title}</div>
-<div class="centro mini">Factura: {_html_escape(getattr(sale, 'invoice_number', '') or '')}</div>
-<div class="centro mini">Fecha: {fecha}</div>
-<div class="centro mini">Caja: {_html_escape(getattr(sale, 'station', '') or '')} · Usuario: {_html_escape(getattr(sale, 'user_name', '') or '')}</div>
+<div class="titulo">{title}</div>
+<table class="datos" width="100%">{datos_html}</table>
 {clave_html}
-<div class="linea"></div>
 {cliente_html}
-<div class="linea"></div>
-<table class="lineas">
-<tr><th class="q">CANT</th><th class="d">DETALLE</th><th class="r">PRECIO</th><th class="r">TOTAL</th></tr>
-{rows}
-</table>
-<div class="linea"></div>
-<table>
-<tr><td class="et">SUBTOTAL</td><td class="rtot">{moneda(subtotal_val)}</td></tr>
+<div class="section-title">DETALLE</div>
+<table class="item-header" width="100%"><tr><td class="item-unit-label" width="64%">CANT. × PRECIO</td><td class="item-total-label" width="36%" align="right">IMPORTE</td></tr></table>
+<div class="items">{rows}</div>
+<table class="totales" width="100%">
+<tr><td class="et" width="52%">SUBTOTAL</td><td class="rtot" width="48%" align="right">{moneda(subtotal_val)}</td></tr>
 {discount_line}
-<tr><td class="et">{impuesto_label}</td><td class="rtot">{impuesto_valor}</td></tr>
-<tr class="total"><td>MONTO TOTAL</td><td class="rtot">{moneda(float(sale.total))}</td></tr>
+<tr><td class="et" width="52%">{impuesto_label}</td><td class="rtot" width="48%" align="right">{impuesto_valor}</td></tr>
+<tr class="total"><td width="52%">MONTO TOTAL</td><td class="rtot" width="48%" align="right">{moneda(float(sale.total))}</td></tr>
 {equiv_line}
 {pago_rows}
 </table>
 {son_line}
 <div class="linea"></div>
-<div class="centro negrita">GRACIAS POR SU PREFERENCIA</div>
+{gracias_html}
 {banco_html}
-<div class="centro mini">{estado_html}</div>
+{f'<div class="centro mini">{_html_escape(estado_html)}</div>' if estado_html else ''}
+{pie_html}
 {reimpresion_html}
 </body></html>"""
 
@@ -339,11 +459,9 @@ div {{ line-height: {espaciado:.2f}; }}
 # ---------- impresión ----------
 
 PAPER_WINDOWS = "windows"
-PAPER_ROLL = "rollo"
 PAPER_LABEL = "etiqueta"
 PAPER_MODES = {
     PAPER_WINDOWS: "Papel configurado en Windows",
-    PAPER_ROLL: "Rollo continuo 80 mm",
     PAPER_LABEL: "Etiqueta (una por ticket)",
 }
 # Reducción mínima aceptable cuando el ticket no cabe en la página.
@@ -355,7 +473,6 @@ def elegir_papel(soportadas: list[tuple[str, float, float]], modo: str,
     """Elige (nombre, ancho, alto) del papel según el modo.
 
     `soportadas` es una lista de (nombre, ancho_mm, alto_mm) del driver.
-    - rollo: la de ancho ~80mm con mayor alto (papel continuo).
     - etiqueta: la de ancho ~80mm más parecida (la etiqueta estándar).
     - windows: None (se respeta el papel que ya tiene el driver).
     """
@@ -368,8 +485,6 @@ def elegir_papel(soportadas: list[tuple[str, float, float]], modo: str,
     candidatas = [p for p in validas if abs(p[1] - ancho_mm) <= 5]
     if not candidatas:
         candidatas = validas
-    if modo == PAPER_ROLL:
-        return max(candidatas, key=lambda p: p[2])
     if modo == PAPER_LABEL:
         return min(candidatas, key=lambda p: (abs(p[1] - ancho_mm), p[2]))
     return None
@@ -395,6 +510,66 @@ def _medir_alto(html: str, width_mm: float = _TICKET_WIDTH_MM,
         return min(max(alto_mm, 30.0), 1000.0)
     except Exception:
         return 297.0
+
+
+class GeometriaTicket(NamedTuple):
+    """Geometría horizontal del ticket en milímetros.
+
+    La comparten el visor y la impresora para que la pantalla y el papel
+    coincidan: mismo ancho útil, mismo margen y misma posición en el papel.
+    """
+
+    contenido_mm: float        # ancho útil del texto
+    visor_mm: float            # ancho de la tira que muestra el visor
+    visor_izq_mm: float        # margen izquierdo dentro de la tira del visor
+    dispositivo_mm: float      # ancho del área de dibujo del QPrinter
+    dispositivo_alto_mm: float  # alto del área de dibujo del QPrinter
+
+
+def geometria_ticket(printer: QPrinter | None,
+                     width_mm: float = _TICKET_WIDTH_MM,
+                     margin_mm: float = _MARGIN_MM) -> GeometriaTicket:
+    """Calcula el ancho útil real según el papel y los márgenes del driver.
+
+    Con QPrinter el área de dibujo ya descuenta los márgenes configurados,
+    así que el contenido se limita al ancho pedido y se centra dentro de esa
+    área (nunca se estira al ancho completo del papel).
+    """
+    ancho = max(20.0, float(width_mm or _TICKET_WIDTH_MM))
+    margen = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
+    dispositivo_mm = ancho
+    dispositivo_alto_mm = 297.0
+    if printer is not None:
+        try:
+            res = float(printer.resolution()) or 96.0
+            ancho_dev = float(printer.width()) * 25.4 / res
+            alto_dev = float(printer.height()) * 25.4 / res
+            if ancho_dev > 0:
+                dispositivo_mm = ancho_dev
+            if alto_dev > 0:
+                dispositivo_alto_mm = alto_dev
+        except Exception:
+            pass
+    contenido = min(max(1.0, ancho - 2 * margen), dispositivo_mm)
+    contenido = max(contenido, min(20.0, dispositivo_mm))
+    return GeometriaTicket(contenido, contenido + 2 * margen, margen,
+                           dispositivo_mm, dispositivo_alto_mm)
+
+
+def dpi_para_impresion(printer: QPrinter | None,
+                       maximo: int = 300) -> int:
+    """Resolución (dpi) para renderizar el ticket como el papel.
+
+    Se usa la del driver para que el visor y el papel se dibujen con la misma
+    métrica de fuente; se limita para no gastar memoria en drivers de 1200 dpi.
+    """
+    if printer is None:
+        return 150
+    try:
+        res = int(round(float(printer.resolution())))
+    except Exception:
+        res = 150
+    return max(96, min(res, int(maximo)))
 
 
 def resolver_impresora(printer_name: str = "") -> str:
@@ -494,6 +669,23 @@ def _impresora_prueba_instalada() -> str:
     return ""
 
 
+def _sera_impresora_prueba(printer_name: str = "") -> bool:
+    """True si la salida terminará en una impresora virtual/PDF.
+
+    La impresora de prueba (POS-Test) y el modo POS_PRINT_TEST guardan el
+    ticket en un archivo con destino fijo; en esos casos no tiene sentido
+    abrir el menú de impresión de Windows, que podría desviar la salida.
+    """
+    name = resolver_impresora(printer_name)
+    if not name:
+        return False
+    if _es_impresora_prueba(name):
+        return True
+    if _es_impresora_pdf(name):
+        return bool(Config.PRINT_TEST_MODE or _impresora_prueba_instalada())
+    return False
+
+
 _ULTIMA_SALIDA_PDF = ""
 
 
@@ -533,10 +725,9 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
     """Crea el QPrinter usando SIEMPRE un tamaño soportado por el driver.
 
     Reglas:
-    - rollo/etiqueta: se elige de la lista de tamaños del driver (nunca se
-      inventa un tamaño, que era lo que hacía que Windows alimentara papel
-      en blanco sin fin).
-    - rollo: el de ~80mm con mayor alto; etiqueta: el más chico que alcance.
+    - etiqueta: se elige de la lista de tamaños del driver (nunca se inventa
+      un tamaño, que era lo que hacía que Windows alimentara papel en blanco
+      sin fin); el más chico que alcance.
     - windows: respeta el papel actual y, si es más corto que el ticket,
       salta al tamaño soportado que mejor encaje (aunque no alcance, se usa
       el mayor para no reducir de más la letra).
@@ -562,8 +753,19 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
             es_prueba = True
         else:
             return None
-    printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-    printer.setPrinterName(name)
+    printer = None
+    try:
+        info = QPrinterInfo.printerInfo(name)
+        if info is not None and not info.isNull():
+            # El QPrinter debe nacer del QPrinterInfo de ESA impresora: al
+            # usar setPrinterName el layout se queda con el papel del driver
+            # predeterminado y el tamaño elegido no correspondía.
+            printer = QPrinter(info, QPrinter.PrinterMode.HighResolution)
+    except Exception:
+        printer = None
+    if printer is None:
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setPrinterName(name)
     if copias > 1:
         try:
             printer.setCopyCount(int(copias))
@@ -589,9 +791,7 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
     alto_contenido = _medir_alto(html, width_mm, margin_mm) if html else 0.0
     soportadas = tamanos_soportados(name)
     elegida = None
-    if modo == PAPER_ROLL:
-        elegida = elegir_papel(soportadas, PAPER_ROLL, width_mm)
-    elif modo == PAPER_LABEL:
+    if modo == PAPER_LABEL:
         elegida = _tamano_que_mejor_encaja(soportadas, alto_contenido, width_mm)
     elif modo == PAPER_WINDOWS and html and alto_actual + 1 < alto_contenido:
         # El papel del driver no alcanza (p. ej. etiqueta 80x15): se usa el
@@ -630,14 +830,21 @@ def _log_impresora(name: str, actual_mm, modo: str, aplicado: str,
         pass
 
 
-def escala_necesaria(printer: QPrinter, html: str) -> float:
-    """Escala (<= 1.0) que necesita el ticket para caber en una página."""
+def escala_necesaria(printer: QPrinter, html: str,
+                     width_mm: float = _TICKET_WIDTH_MM,
+                     margin_mm: float = _MARGIN_MM) -> float:
+    """Escala (<= 1.0) que necesita el ticket para caber en una página.
+
+    Usa el mismo ancho útil que el visor y el pintado; si se midiera con el
+    ancho completo del área imprimible la escala no correspondería.
+    """
     try:
-        rect = printer.pageLayout().paintRectPixels(printer.resolution())
+        res = float(printer.resolution()) or 96.0
+        geo = geometria_ticket(printer, width_mm, margin_mm)
         doc = _documento(html)
-        doc.setTextWidth(max(1.0, float(rect.width())))
+        doc.setTextWidth(max(1.0, geo.contenido_mm * res / 25.4))
         alto_doc = float(doc.size().height())
-        alto_pagina = float(rect.height())
+        alto_pagina = geo.dispositivo_alto_mm * res / 25.4
         if alto_doc <= 0 or alto_pagina <= 0 or alto_doc <= alto_pagina:
             return 1.0
         return max(_ESCALA_MINIMA, alto_pagina / alto_doc)
@@ -654,25 +861,40 @@ def _escala_para_caber(alto_pagina: float, alto_doc: float,
 
 
 def _imprimir_una_pagina(html: str, printer: QPrinter,
-                         reducir: bool = True) -> bool:
-    """Dibuja el ticket en UNA sola página.
+                         reducir: bool = True,
+                         width_mm: float = _TICKET_WIDTH_MM,
+                         margin_mm: float = _MARGIN_MM) -> bool:
+    """Dibuja el ticket en UNA sola página, igual que la vista previa.
 
     No usa QTextDocument.print() (que pagina el contenido y era el origen de
-    las "13 páginas"): pinta el documento una vez, recortado al área imprimible
+    las "13 páginas"): pinta el documento una vez, recortado al área de dibujo
     y reducido si no cabe (salvo que `reducir` sea False). Así nunca se emite
     más de una página ni papel en blanco sin fin.
+
+    OJO: con QPrinter el origen del QPainter YA está en el borde del área
+    imprimible (los márgenes configurados se descuentan solos), por lo que no
+    se debe volver a trasladar por el margen: eso corría el ticket a la
+    derecha y recortaba el lado derecho respecto del visor.
     """
     try:
-        rect = printer.pageLayout().paintRectPixels(printer.resolution())
+        res = float(printer.resolution()) or 96.0
+        per_mm = res / 25.4
+        dev_w = max(1, int(printer.width()))
+        dev_h = max(1, int(printer.height()))
+        geo = geometria_ticket(printer, width_mm, margin_mm)
+        contenido_px = max(1.0, geo.contenido_mm * per_mm)
         doc = _documento(html)
-        doc.setTextWidth(max(1.0, float(rect.width())))
+        doc.setTextWidth(contenido_px)
         alto_doc = float(doc.size().height())
-        escala = (_escala_para_caber(float(rect.height()), alto_doc)
+        escala = (_escala_para_caber(float(dev_h), alto_doc)
                   if reducir else 1.0)
         painter = QPainter(printer)
         try:
-            painter.setClipRect(rect)
-            painter.translate(rect.left(), rect.top())
+            painter.setClipRect(0, 0, dev_w, dev_h)
+            # El contenido se centra en el área de dibujo: en papel angosto
+            # (58 mm) ocupa todo; en papel ancho (A4/Carta) queda centrado.
+            x = max(0.0, (dev_w - contenido_px * escala) / 2.0)
+            painter.translate(x, 0.0)
             if escala < 1.0:
                 painter.scale(escala, escala)
             doc.drawContents(painter)
@@ -691,17 +913,19 @@ def _imprimir_una_pagina(html: str, printer: QPrinter,
         return False
 
 
-def advertencia_papel(printer: QPrinter, html: str) -> str:
+def advertencia_papel(printer: QPrinter, html: str,
+                      width_mm: float = _TICKET_WIDTH_MM,
+                      margin_mm: float = _MARGIN_MM) -> str:
     """Aviso si el ticket no cabe en el papel y se va a reducir."""
     try:
         pagina = printer.pageLayout().pageSize().size(QPageSize.Unit.Millimeter)
-        alto_contenido = _medir_alto(html)
+        alto_contenido = _medir_alto(html, width_mm, margin_mm)
         if pagina.height() + 1 < alto_contenido:
             return (f"El papel elegido ({pagina.width():.0f}×"
                     f"{pagina.height():.0f} mm) es más corto que el ticket "
                     f"({alto_contenido:.0f} mm): se reducirá para que entre "
-                    f"en una sola página. Para evitarlo elija «Rollo continuo "
-                    f"80 mm».")
+                    f"en una sola página. Para evitarlo use un papel más alto "
+                    f"en el driver de la impresora.")
     except Exception:
         pass
     return ""
@@ -720,7 +944,7 @@ def imprimir_ticket(html: str, printer_name: str = "", modo_papel: str = "",
                                   width_mm, margin_mm)
     if printer is None:
         return False
-    return _imprimir_una_pagina(html, printer, reducir)
+    return _imprimir_una_pagina(html, printer, reducir, width_mm, margin_mm)
 
 
 def imprimir_ticket_con_dialogo(html: str, printer_name: str = "",
@@ -741,7 +965,7 @@ def imprimir_ticket_con_dialogo(html: str, printer_name: str = "",
     dialog = QPrintDialog(printer)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
-    return _imprimir_una_pagina(html, printer, reducir)
+    return _imprimir_una_pagina(html, printer, reducir, width_mm, margin_mm)
 
 
 def previsualizar_ticket(html: str, printer_name: str = "",
@@ -776,16 +1000,23 @@ def imprimir_ticket_venta(sale, company: dict, db=None,
     """Genera e imprime el ticket de una venta en la impresora configurada.
 
     Si en Configuración se activó el diálogo de impresión, se muestra el menú
-    (Imprimir/Cancelar); si no, se imprime directo.
+    (Imprimir/Cancelar); si no, se imprime directo. Con la impresora virtual
+    de prueba no se abre el menú: el destino ya es un PDF fijo que se abre
+    solo al terminar.
     """
     name = printer_name or (get_printer_name(db) if db is not None else "")
     modo = get_paper_mode(db) if db is not None else ""
     ajustes = get_ticket_settings(db) if db is not None else {}
+    formato = get_ticket_format(db)
     html = ticket_html(sale, company, es_reimpresion=es_reimpresion,
                        font_pt=ajustes.get("font_pt", DEFAULT_FONT_PT),
                        line_spacing=ajustes.get("line_spacing",
-                                                DEFAULT_LINE_SPACING))
-    if db is not None and get_show_dialog(db):
+                                                DEFAULT_LINE_SPACING),
+                       formato=formato)
+    mostrar_dialogo = (
+        db is not None and get_show_dialog(db)
+        and not _sera_impresora_prueba(name))
+    if mostrar_dialogo:
         return imprimir_ticket_con_dialogo(
             html, name, modo,
             width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
@@ -831,6 +1062,29 @@ def _set_config(db, key: str, value: str) -> None:
         pass
 
 
+def get_ticket_format(db) -> dict:
+    """Carga el diseño editable del ticket desde app_config."""
+    if db is None:
+        return dict(TICKET_FORMAT_DEFAULTS)
+    raw = _get_config(db, "ticket_format", "")
+    if not raw:
+        return dict(TICKET_FORMAT_DEFAULTS)
+    try:
+        value = _json.loads(raw)
+    except (TypeError, ValueError):
+        return dict(TICKET_FORMAT_DEFAULTS)
+    return normalizar_formato_ticket(value)
+
+
+def save_ticket_format(db, formato: dict) -> None:
+    """Guarda los bloques y textos del diseño del ticket en app_config."""
+    if db is None:
+        return
+    limpio = normalizar_formato_ticket(formato)
+    _set_config(db, "ticket_format", _json.dumps(
+        limpio, ensure_ascii=False, separators=(",", ":")))
+
+
 def get_printer_name(db) -> str:
     """Nombre de la impresora de tickets guardada en app_config."""
     return _get_config(db, "printer_name")
@@ -842,7 +1096,7 @@ def save_printer_name(db, name: str) -> None:
 
 
 def get_paper_mode(db) -> str:
-    """Modo de papel del ticket: windows/rollo/etiqueta."""
+    """Modo de papel del ticket: windows/etiqueta."""
     modo = _get_config(db, "ticket_paper_mode", PAPER_WINDOWS)
     return modo if modo in PAPER_MODES else PAPER_WINDOWS
 

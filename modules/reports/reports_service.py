@@ -617,3 +617,16 @@ class ReportsService:
             tuple(params),
         )
         return [dict(row) for row in rows]
+
+    def get_credit_note(self, note_id: int) -> dict | None:
+        """Devuelve una nota de crédito por id (para el detalle del movimiento)."""
+        rows = self.db.execute_query(
+            """SELECT n.*, s.invoice_number AS factura_original,
+                      c.name AS client_name
+               FROM credit_notes n
+               LEFT JOIN sales s ON s.id = n.sale_id
+               LEFT JOIN clients c ON c.id = COALESCE(n.client_id, s.client_id)
+               WHERE n.id = ?""",
+            (note_id,),
+        )
+        return dict(rows[0]) if rows else None

@@ -18,7 +18,7 @@ app = QApplication.instance() or QApplication([])
 from database.db_manager import DatabaseManager
 from modules.documentos.ticket import (
     PAPER_LABEL,
-    PAPER_ROLL,
+    PAPER_MODES,
     PAPER_WINDOWS,
     _preparar_impresora,
     elegir_papel,
@@ -62,10 +62,19 @@ SOPORTADAS = [
 ]
 
 
-def test_elegir_papel_rollo_usa_el_mas_alto():
-    elegida = elegir_papel(SOPORTADAS, PAPER_ROLL)
-    assert elegida is not None and elegida[0] == "Roll paper 80 x 297mm"
-    assert elegida[2] == 297.0
+def test_modos_de_papel_sin_rollo():
+    assert "rollo" not in PAPER_MODES
+    assert set(PAPER_MODES) == {PAPER_WINDOWS, PAPER_LABEL}
+
+
+def test_modo_rollo_guardado_migra_a_windows():
+    db = DatabaseManager(TEST_DB)
+    db.initialize()
+    try:
+        save_paper_mode(db, "rollo")
+        assert get_paper_mode(db) == PAPER_WINDOWS
+    finally:
+        db.close()
 
 
 def test_elegir_papel_etiqueta_prefiere_ancho_exacto():
@@ -83,11 +92,11 @@ def test_elegir_papel_etiqueta_empate_de_ancho_usa_la_corta():
 
 def test_elegir_papel_windows_no_cambia_nada():
     assert elegir_papel(SOPORTADAS, PAPER_WINDOWS) is None
-    assert elegir_papel([], PAPER_ROLL) is None
+    assert elegir_papel([], PAPER_LABEL) is None
 
 
-def test_elegir_papel_sin_ancho_80_usa_todas():
-    elegida = elegir_papel([("A4", 210.0, 297.0)], PAPER_ROLL)
+def test_elegir_papel_etiqueta_sin_ancho_80_usa_todas():
+    elegida = elegir_papel([("A4", 210.0, 297.0)], PAPER_LABEL)
     assert elegida == ("A4", 210.0, 297.0)
 
 
@@ -205,10 +214,35 @@ def test_ticket_formato_referencia():
           and "FACTURA CONTADO" in html)
     print(f"[{'OK' if ok else 'FAIL'}] ticket con formato de la referencia")
     assert ok
-    # Las líneas van en 4 columnas (sin IVA por línea) y los totales usan .rtot
-    cabecera = html.split("<table class=\"lineas\">")[1].split("</tr>")[0]
-    assert cabecera.count("<th") == 4, cabecera
+    # Cada artículo usa descripción + línea de precio/importe para evitar que
+    # las cuatro columnas se peguen en el papel térmico de 80 mm.
+    assert '<div class="section-title">DETALLE</div>' in html
+    assert '<table class="item-header"' in html
+    assert '<table class="lineas">' not in html
     assert 'class="rtot"' in html
+
+
+def test_ticket_anchos_respetados_por_qt():
+    """Qt ignora `width` en CSS: las columnas deben usar el atributo HTML.
+
+    Sin esto, los valores numéricos se pegaban a las etiquetas
+    (p. ej. «FacturaV-EJEMPLO» o «CANT. × PRECIOIMPORTE»).
+    """
+    from PyQt6.QtGui import QTextDocument, QTextLength, QTextTable
+
+    from modules.documentos.ticket import ticket_html
+
+    doc = QTextDocument()
+    doc.setHtml(ticket_html(_venta(), dict(EMPRESA_BASE)))
+    doc.setTextWidth(300.0)
+    tablas = [f for f in doc.rootFrame().childFrames()
+              if isinstance(f, QTextTable)]
+    assert tablas, "el ticket no tiene tablas"
+    for tabla in tablas:
+        for constraint in tabla.format().columnWidthConstraints():
+            assert constraint.type() == QTextLength.Type.PercentageLength, (
+                "columna sin ancho porcentual (los valores se pegan)")
+            assert constraint.rawValue() > 0
 
 
 def test_ticket_omite_campos_vacios_y_muestra_extras():
@@ -466,7 +500,7 @@ def test_impresion_pdf_una_pagina():
     Config.PRINT_TEST_PDF = destino
     try:
         html = ticket_html(_venta(), dict(EMPRESA_BASE), font_pt=12.0)
-        ok = imprimir_ticket(html, "Microsoft Print to PDF", "rollo")
+        ok = imprimir_ticket(html, "Microsoft Print to PDF", "")
         assert ok is True, "debía imprimir a la impresora virtual"
         assert os.path.isfile(destino), "no se generó el PDF de prueba"
         with open(destino, "rb") as handle:
@@ -506,7 +540,7 @@ def test_impresion_a_impresora_virtual_visible():
     Config.PRINT_TEST_PDF = ""
     try:
         html = ticket_html(_venta(), dict(EMPRESA_BASE), font_pt=12.0)
-        ok = imprimir_ticket(html, "POS-Test", "rollo")
+        ok = imprimir_ticket(html, "POS-Test", "")
         assert ok is True
         salida = ultima_salida_pdf()
         assert salida and salida.startswith(str(carpeta)), salida
@@ -575,10 +609,161 @@ def test_visor_preview_renderiza_una_pagina():
 
     dialog = TicketPreviewDialog(ticket_html(_venta(), dict(EMPRESA_BASE)))
     try:
+        from utils.helpers import NoWheelComboBox, NoWheelIntSpinBox
+
         assert dialog.copias_spin.value() == 1
-        assert dialog.papel_combo.count() == 3
+        assert dialog.papel_combo.count() == 2
+        assert isinstance(dialog.papel_combo, NoWheelComboBox)
+        assert isinstance(dialog.copias_spin, NoWheelIntSpinBox)
         dialog.show()
         app.processEvents()
         assert dialog._pagina.height() > 300
     finally:
         dialog.close()
+
+
+# ---------- geometría compartida entre el visor y la impresión ----------
+
+class _ImpresoraFalsa:
+    """QPrinter mínimo para probar la geometría sin abrir la impresora."""
+
+    def __init__(self, ancho_mm: float, alto_mm: float, res: int):
+        self._ancho_px = max(1, int(round(ancho_mm * res / 25.4)))
+        self._alto_px = max(1, int(round(alto_mm * res / 25.4)))
+        self._res = res
+
+    def resolution(self):
+        return self._res
+
+    def width(self):
+        return self._ancho_px
+
+    def height(self):
+        return self._alto_px
+
+
+def _tinta_bbox(imagen, dpi: float):
+    """(x0, x1, y0) de la tinta de una imagen, en milímetros."""
+    from PyQt6.QtGui import QImage
+
+    imagen = imagen.convertToFormat(QImage.Format.Format_Grayscale8)
+    ancho, alto = imagen.width(), imagen.height()
+    stride = imagen.bytesPerLine()
+    buffer = bytes(imagen.constBits().asarray(alto * stride))
+    tabla = bytes(1 if i < 250 else 0 for i in range(256))
+    min_x, max_x, min_y = ancho, -1, alto
+    for y in range(alto):
+        fila = buffer[y * stride:y * stride + ancho].translate(tabla)
+        pos = fila.find(b"\x01")
+        if pos >= 0:
+            min_x = min(min_x, pos)
+            max_x = max(max_x, fila.rfind(b"\x01"))
+            min_y = min(min_y, y)
+    mm = 25.4 / dpi
+    return min_x * mm, (max_x + 1) * mm, min_y * mm
+
+
+def _tinta_pdf_mm(pdf: str, dpi: int = 150):
+    """(ancho de página, x0, x1, y0) de la tinta del PDF, en milímetros."""
+    from PyQt6.QtCore import QSize
+    from PyQt6.QtGui import QImage, QPainter
+    from PyQt6.QtPdf import QPdfDocument
+
+    doc = QPdfDocument(None)
+    if doc.load(pdf) != QPdfDocument.Error.None_:
+        raise AssertionError(f"no se pudo leer el PDF: {pdf}")
+    pagina = doc.pagePointSize(0)
+    ancho_mm = pagina.width() / 72 * 25.4
+    imagen: QImage = doc.render(0, QSize(int(ancho_mm / 25.4 * dpi),
+                                         int(pagina.height() / 72 * dpi)))
+    if imagen.hasAlphaChannel():
+        fondo = QImage(imagen.size(), QImage.Format.Format_RGB32)
+        fondo.fill(0xFFFFFFFF)
+        pintor = QPainter(fondo)
+        pintor.drawImage(0, 0, imagen)
+        pintor.end()
+        imagen = fondo
+    x0, x1, y0 = _tinta_bbox(imagen, dpi)
+    return ancho_mm, x0, x1, y0
+
+
+def test_geometria_ticket_respeta_driver_y_ancho_configurado():
+    from modules.documentos.ticket import geometria_ticket
+
+    # Área de dibujo angosta (form 58 mm): el contenido se limita al área.
+    geo = geometria_ticket(_ImpresoraFalsa(52.0, 210.0, 203), 80.0, 3.0)
+    assert geo.contenido_mm == pytest.approx(52.0, abs=0.2)
+    assert geo.visor_mm == pytest.approx(58.0, abs=0.2)
+    assert geo.visor_izq_mm == pytest.approx(3.0)
+
+    # Papel ancho (A4): nunca se estira al ancho completo del papel.
+    geo = geometria_ticket(_ImpresoraFalsa(204.0, 291.0, 600), 80.0, 3.0)
+    assert geo.contenido_mm == pytest.approx(74.0, abs=0.2)
+    assert geo.visor_mm == pytest.approx(80.0, abs=0.2)
+
+    # Papel de 80 mm (térmica): el contenido ocupa el área imprimible.
+    geo = geometria_ticket(_ImpresoraFalsa(74.0, 3269.9, 203), 80.0, 3.0)
+    assert geo.contenido_mm == pytest.approx(74.0, abs=0.2)
+
+    # Sin impresora: se usa el ancho configurado tal cual.
+    geo = geometria_ticket(None, 80.0, 3.0)
+    assert geo.contenido_mm == pytest.approx(74.0)
+    assert geo.visor_mm == pytest.approx(80.0)
+
+
+def test_visor_renderiza_con_la_geometria_del_papel():
+    from modules.documentos.ticket import GeometriaTicket, ticket_html
+    from ui.ticket_preview import render_ticket
+
+    geo = GeometriaTicket(73.95, 79.95, 3.0, 73.95, 3270.0)
+    pixmap = render_ticket(ticket_html(_venta(), dict(EMPRESA_BASE)),
+                           geometria=geo, dpi=203)
+    assert pixmap.width() == round(geo.visor_mm * 203 / 25.4)
+    x0, x1, _y0 = _tinta_bbox(pixmap.toImage(), 203)
+    assert x0 == pytest.approx(3.0, abs=0.6), "margen izquierdo del visor"
+    assert (x1 - x0) == pytest.approx(geo.contenido_mm, abs=1.5), \
+        "el contenido debe ocupar el ancho útil del papel"
+
+
+def test_margenes_impresos_coinciden_con_el_visor():
+    """Regresión: el ticket salía corrido a la derecha y estirado al ancho
+    del área imprimible (con el lado derecho recortado)."""
+    pytest.importorskip("PyQt6.QtPdf")
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
+    nombres = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if "Microsoft Print to PDF" not in nombres:
+        pytest.skip("No está instalada la impresora virtual PDF")
+
+    from config import Config
+    from modules.documentos.ticket import imprimir_ticket, ticket_html
+
+    destino = os.path.join(PROJECT_DIR, "tests", ".tmp", "margenes.pdf")
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    if os.path.exists(destino):
+        os.remove(destino)
+    original_modo = Config.PRINT_TEST_MODE
+    original_pdf = Config.PRINT_TEST_PDF
+    Config.PRINT_TEST_MODE = True
+    Config.PRINT_TEST_PDF = destino
+    try:
+        ok = imprimir_ticket(ticket_html(_venta(), dict(EMPRESA_BASE)),
+                             "Microsoft Print to PDF", "", width_mm=80.0,
+                             margin_mm=3.0)
+        assert ok is True, "debía imprimir a la impresora virtual"
+        assert os.path.isfile(destino), "no se generó el PDF"
+        ancho_pagina, x0, x1, y0 = _tinta_pdf_mm(destino)
+    finally:
+        Config.PRINT_TEST_MODE = original_modo
+        Config.PRINT_TEST_PDF = original_pdf
+        if os.path.exists(destino):
+            os.remove(destino)
+
+    esperado = (ancho_pagina - 74.0) / 2.0
+    assert (x1 - x0) == pytest.approx(74.0, abs=1.0), \
+        "el contenido debe medir el ancho configurado, no el del papel"
+    assert x0 == pytest.approx(esperado, abs=1.0), \
+        "margen izquierdo distinto al del visor"
+    assert (ancho_pagina - x1) == pytest.approx(esperado, abs=1.0), \
+        "margen derecho distinto al del visor (contenido recortado)"
+    assert y0 == pytest.approx(3.0, abs=1.0), "margen superior"

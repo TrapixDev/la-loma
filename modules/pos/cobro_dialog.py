@@ -159,12 +159,14 @@ _METHODS = ("Efectivo", "Tarjeta", "Sinpe")
 class PrintDialog(QDialog):
     """Diálogo para elegir la impresora antes de imprimir."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None,
+                 default_printer: str = ""):
         super().__init__(parent)
         self.setWindowTitle("Imprimir")
         self.setMinimumWidth(380)
         self.setMinimumHeight(200)
         self.selected_printer = ""
+        self._default_printer = default_printer
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -179,6 +181,12 @@ class PrintDialog(QDialog):
         self.printer_combo.addItem("Predeterminada de Windows", "")
         for _printer in QPrinterInfo.availablePrinters():
             self.printer_combo.addItem(_printer.printerName(), _printer.printerName())
+        if self._default_printer:
+            indice = self.printer_combo.findData(self._default_printer)
+            if indice < 0:
+                indice = self.printer_combo.findText(self._default_printer)
+            if indice >= 0:
+                self.printer_combo.setCurrentIndex(indice)
         layout.addWidget(self.printer_combo)
 
         hint = QLabel("Si su impresora no aparece, verifique que esté instalada en Windows.")
@@ -208,6 +216,7 @@ class CobroDialog(QDialog):
 
     def __init__(self, total: float, exchange_rate: float = 520.0,
                  descuentos: dict | None = None,
+                 default_printer: str = "",
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.total = total
@@ -216,6 +225,7 @@ class CobroDialog(QDialog):
         self.exchange_rate = exchange_rate
         self.currency = "CRC"  # Moneda por defecto
         self.method = "Efectivo"
+        self._default_printer = default_printer
         # Descuentos por método: {"Efectivo": {"total": 95000, "discount": 5000}}
         self.descuentos = descuentos or {}
         self.discount = 0.0
@@ -240,8 +250,6 @@ class CobroDialog(QDialog):
     def _build_amount_field(self) -> QLineEdit:
         field = QLineEdit()
         field.setObjectName("cashInput")
-        field.setPlaceholderText("0")
-        field.setText("0")
         field.setAlignment(Qt.AlignmentFlag.AlignRight)
         return field
 
@@ -508,7 +516,7 @@ class CobroDialog(QDialog):
         """Actualiza placeholders y etiquetas con la moneda vigente."""
         symbol = self._currency_symbol()
         for field in (self.cash_input, self.mix_amount_a, self.mix_amount_b):
-            field.setPlaceholderText(f"{symbol} 0")
+            field.setPlaceholderText(symbol)
         self._update_amount_label()
 
     def _update_amount_label(self) -> None:
@@ -550,7 +558,7 @@ class CobroDialog(QDialog):
             return
         missing = round(self.total - amount_a, 2)
         if missing <= 0:
-            self.mix_amount_b.setText("0")
+            self.mix_amount_b.setText("")
             return
         self.mix_amount_b.setText(f"{missing:,.2f}")
 
@@ -776,7 +784,7 @@ class CobroDialog(QDialog):
             self.setFixedHeight(600)
 
     def _on_print(self) -> None:
-        dialog = PrintDialog(self)
+        dialog = PrintDialog(self, default_printer=self._default_printer)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.print_requested = True

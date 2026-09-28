@@ -31,6 +31,12 @@ class ExpenseService:
              session.user_id, session.user_name, session.station),
         )
 
+    def get_expense(self, expense_id: int) -> Expense | None:
+        """Devuelve un gasto por id (para el detalle del movimiento)."""
+        rows = self.db.execute_query(
+            "SELECT * FROM expenses WHERE id = ?", (expense_id,))
+        return Expense(**rows[0]) if rows else None
+
     def delete_expense(self, expense_id: int) -> bool:
         return self.db.execute_update("DELETE FROM expenses WHERE id = ?", (expense_id,))
 

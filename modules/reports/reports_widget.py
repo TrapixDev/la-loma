@@ -35,7 +35,14 @@ from utils.helpers import (
     NoWheelSpinBox,
     NoWheelComboBox,
 )
-from modules.documentos import reimprimir_factura, generar_nota_credito
+from modules.documentos import generar_nota_credito
+from modules.reports.detail_dialogs import (
+    CreditNoteDetailDialog,
+    CreditPaymentDetailDialog,
+    ExpenseDetailDialog,
+    SaleDetailDialog,
+    reimprimir_venta,
+)
 
 MONTH_NAMES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -312,15 +319,23 @@ def _totals_sale(sale) -> dict:
 
 
 class MovimientosDiaDialog(QDialog):
-    """Ventana emergente con las ventas y gastos de un día específico."""
+    """Ventana emergente con las ventas y gastos de un día específico.
+
+    Doble clic en un movimiento abre el detalle correspondiente (venta,
+    gasto, abono o nota de crédito).
+    """
 
     def __init__(self, day: str, movimientos: list[dict],
+                 services: dict | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
+        self.services = services or {}
+        self.movimientos = list(movimientos or [])
+        self._table: QTableWidget | None = None
         self.setWindowTitle(f"Movimientos del día {_fmt_day(day)}")
         self.setMinimumSize(520, 250)
         self.setMaximumHeight(480)
-        self._setup_ui(movimientos)
+        self._setup_ui(self.movimientos)
 
     def _setup_ui(self, movimientos: list[dict]) -> None:
         from PyQt6.QtGui import QBrush, QColor
@@ -339,6 +354,10 @@ class MovimientosDiaDialog(QDialog):
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
 
+        hint = QLabel("Doble clic en un movimiento para ver el detalle.")
+        hint.setStyleSheet("font-size: 13px; color: #8b93a3;")
+        layout.addWidget(hint)
+
         table = EmptyStateTable("Sin movimientos para este día.", 0, 4)
         table.setHorizontalHeaderLabels(["Tipo", "Detalle", "Método", "Monto"])
         table.verticalHeader().setVisible(False)
@@ -346,6 +365,9 @@ class MovimientosDiaDialog(QDialog):
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setAlternatingRowColors(True)
         table.setRowCount(len(movimientos))
+        table.setToolTip("Doble clic para ver el detalle del movimiento")
+        table.doubleClicked.connect(self._abrir_detalle)
+        self._table = table
 
         color = {
             "VENTA": QColor(34, 197, 94),
@@ -380,6 +402,34 @@ class MovimientosDiaDialog(QDialog):
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("Cerrar")
         root_layout.addWidget(buttons)
+
+    def _abrir_detalle(self, index=None) -> None:
+        """Abre el detalle de la venta, el gasto, el abono o la nota."""
+        row = -1
+        if index is not None and hasattr(index, "row"):
+            row = index.row()
+        elif self._table is not None:
+            row = self._table.currentRow()
+        if row < 0 or row >= len(self.movimientos):
+            return
+        movimiento = self.movimientos[row]
+        tipo = str(movimiento.get("tipo") or "")
+        movimiento_id = int(movimiento.get("id") or 0)
+        if not movimiento_id:
+            return
+        if tipo in ("VENTA", "CRÉDITO"):
+            dialog = SaleDetailDialog(self.services, movimiento_id, parent=self)
+        elif tipo == "GASTO":
+            dialog = ExpenseDetailDialog(self.services, movimiento_id, parent=self)
+        elif tipo == "ABONO":
+            dialog = CreditPaymentDetailDialog(self.services, movimiento_id,
+                                               parent=self)
+        elif tipo == "NOTA":
+            dialog = CreditNoteDetailDialog(self.services, movimiento_id,
+                                            parent=self)
+        else:
+            return
+        dialog.exec()
 
 
 class ReportsWidget(QWidget):
@@ -515,6 +565,8 @@ class ReportsWidget(QWidget):
             ["N°", "Fecha", "Cliente", "Total", "Pago", "Hacienda", "Estado"],
             "Sin ventas registradas en el período.")
         self.sales_table.itemSelectionChanged.connect(self._update_action_buttons)
+        self.sales_table.doubleClicked.connect(self._open_sale_detail)
+        self.sales_table.setToolTip("Doble clic para ver el detalle de la venta")
         self.daily_table.doubleClicked.connect(self._open_day_movements)
         self.month_page = QWidget()
         month_layout = QVBoxLayout(self.month_page)
@@ -665,7 +717,7 @@ class ReportsWidget(QWidget):
             return
         report = self.services["reports"]
         movimientos = report.list_movements(day, day)
-        dialog = MovimientosDiaDialog(day, movimientos, parent=self)
+        dialog = MovimientosDiaDialog(day, movimientos, self.services, parent=self)
         dialog.exec()
 
     def _update_action_buttons(self) -> None:
@@ -702,25 +754,7 @@ class ReportsWidget(QWidget):
         sale_id = int(sale.get("id") or 0)
         if not sale_id:
             return
-        cart_service = self.services.get("cart")
-        db = self.services.get("db")
-        if cart_service is None or db is None:
-            QMessageBox.warning(self, "Reimprimir", "No hay acceso a los datos de ventas.")
-            return
-        resultado = reimprimir_factura(db, cart_service, sale_id, imprimir=True)
-        if not resultado or not resultado.get("pdf"):
-            QMessageBox.warning(self, "Reimprimir", "No se encontró el documento de esa venta.")
-            return
-        if resultado.get("impreso"):
-            QMessageBox.information(self, "Reimprimir",
-                                    f"Factura reimpresa y guardada en:\n{resultado.get('pdf')}")
-        else:
-            QMessageBox.information(
-                self, "Reimprimir",
-                f"No se pudo imprimir en la impresora térmica ni en una de "
-                f"hojas.\nLa factura quedó guardada en:\n{resultado.get('pdf')}\n\n"
-                f"Para imprimirla, elija una impresora A4 en "
-                f"Configuración → Impresora y docs.")
+        reimprimir_venta(self, self.services, sale_id)
 
     def _selected_sale(self) -> dict | None:
         row = self.sales_table.currentRow()
@@ -728,6 +762,16 @@ class ReportsWidget(QWidget):
         if row < 0 or row >= len(sales):
             return None
         return sales[row]
+
+    def _open_sale_detail(self, index=None) -> None:
+        """Muestra el detalle de la venta seleccionada (doble clic)."""
+        sale = self._selected_sale()
+        if sale is None:
+            return
+        sale_id = int(sale.get("id") or 0)
+        if not sale_id:
+            return
+        SaleDetailDialog(self.services, sale_id, parent=self).exec()
 
     def _anular_sale(self) -> None:
         sale = self._selected_sale()

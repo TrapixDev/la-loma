@@ -122,10 +122,35 @@ from PyQt6.QtWidgets import QDoubleSpinBox
 
 
 class NoWheelSpinBox(QDoubleSpinBox):
-    """QDoubleSpinBox que ignora la rueda del mouse para evitar cambios accidentales."""
+    """QDoubleSpinBox que ignora la rueda del mouse para evitar cambios accidentales.
+
+    Con mínimo 0, el campo se muestra vacío en vez de "0.00" (se ve claro si
+    ya tiene un valor o no, y evita guardar un 0 sin darse cuenta).
+    """
 
     def wheelEvent(self, event):
         event.ignore()
+
+    def setRange(self, minimo: float, maximo: float) -> None:
+        super().setRange(minimo, maximo)
+        self.setSpecialValueText(" " if minimo == 0 else "")
+
+
+from PyQt6.QtWidgets import QSpinBox
+
+
+class NoWheelIntSpinBox(QSpinBox):
+    """QSpinBox entero que ignora la rueda del mouse para evitar cambios accidentales.
+
+    Con mínimo 0, el campo se muestra vacío en vez de "0".
+    """
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+    def setRange(self, minimo: int, maximo: int) -> None:
+        super().setRange(minimo, maximo)
+        self.setSpecialValueText(" " if minimo == 0 else "")
 
 
 from PyQt6.QtWidgets import QComboBox

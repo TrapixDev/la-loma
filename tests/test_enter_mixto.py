@@ -19,6 +19,7 @@ FALTANTE = 114500.0  # 169500 - 55000
 
 def test_enter_insuficiente_switch_mixto():
     dlg = CobroDialog(TOTAL)
+    assert dlg.cash_input.text() == "", "el campo de efectivo inicia vacío"
     dlg.cash_input.setText("55000")
     assert not dlg.cobrar_btn.isEnabled(), "efectivo insuficiente deshabilita COBRAR"
     dlg.cash_input.returnPressed.emit()
