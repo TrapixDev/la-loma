@@ -21,7 +21,9 @@ from utils.helpers import format_currency, monto_en_letras
 _TICKET_WIDTH_MM = 80.0
 _MARGIN_MM = 3.0
 # Ajustes de impresión editables desde el editor o el visor y guardados en BD.
-DEFAULT_FONT_PT = 12.0
+# La letra base del ticket: 13 pt en la térmica de 203 dpi se lee bien y los
+# textos pequeños ya no quedan diminutos.
+DEFAULT_FONT_PT = 13.0
 DEFAULT_LINE_SPACING = 1.35
 SCALE_FIT = "ajustar"
 SCALE_REAL = "real"
@@ -378,33 +380,33 @@ def ticket_html(sale, company: dict, es_reimpresion: bool = False,
 body {{ font-family: Arial, 'Segoe UI', sans-serif; font-size: {base:.1f}pt; color: #000; margin: 0; }}
 div {{ line-height: {espaciado:.2f}; }}
 .centro {{ text-align: center; }}
-.nombre {{ font-weight: bold; font-size: {base + 2:.1f}pt; margin-bottom: 2px; }}
-.mini {{ font-size: {base - 1:.1f}pt; }}
+.nombre {{ font-weight: bold; font-size: {base + 2.5:.1f}pt; margin-bottom: 2px; }}
+.mini {{ font-size: {base:.1f}pt; }}
 .negrita {{ font-weight: bold; }}
 .wrap {{ word-wrap: break-word; }}
 .logo {{ margin-bottom: 3px; }}
 .empresa-linea {{ margin: 1px 0; }}
 .linea {{ border-top: 1px dashed #555; margin: 5px 0; }}
-.titulo {{ font-weight: bold; font-size: {base + 1:.1f}pt; text-align: center; margin: 4px 0; }}
+.titulo {{ font-weight: bold; font-size: {base + 1.5:.1f}pt; text-align: center; margin: 4px 0; }}
 table {{ width: 100%; border-collapse: collapse; }}
 td {{ padding: 1px 0; vertical-align: top; }}
 table.datos td {{ padding: 1px 0; }}
-.dato-label {{ font-weight: bold; }}
+.dato-label {{ font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
 .dato-value {{ word-wrap: break-word; }}
 .cliente {{ border-top: 1px solid #888; border-bottom: 1px solid #888; padding: 4px 0; margin: 4px 0; }}
-.clave {{ font-size: {base - 2:.1f}pt; word-wrap: break-word; margin: 3px 0; }}
-.section-title {{ font-weight: bold; margin: 4px 0 2px; }}
-.item-header td {{ border-top: 1px solid #555; border-bottom: 1px solid #555; padding: 3px 0; font-size: {base - 2:.1f}pt; font-weight: bold; }}
+.clave {{ font-size: {base - 1:.1f}pt; word-wrap: break-word; margin: 3px 0; }}
+.section-title {{ font-weight: bold; font-size: {base + 0.5:.1f}pt; margin: 4px 0 2px; }}
+.item-header td {{ border-top: 1px solid #555; border-bottom: 1px solid #555; padding: 3px 0; font-size: {base - 1:.1f}pt; font-weight: bold; }}
 .item {{ border-bottom: 1px dotted #999; padding: 3px 0; }}
-.item-name {{ font-weight: bold; word-wrap: break-word; }}
-.item-meta td {{ padding: 1px 0; font-size: {base - 1:.1f}pt; }}
+.item-name {{ font-weight: bold; font-size: {base + 0.5:.1f}pt; word-wrap: break-word; }}
+.item-meta td {{ padding: 1px 0; font-size: {base:.1f}pt; }}
 .item-unit {{ word-wrap: break-word; }}
-.item-total {{ text-align: right; white-space: nowrap; font-weight: bold; }}
+td.item-total {{ text-align: right; white-space: nowrap; font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
 table.totales {{ margin-top: 3px; }}
 table.totales td {{ padding: 2px 0; }}
-.rtot {{ text-align: right; white-space: nowrap; font-size: {base - 1:.1f}pt; }}
-.et {{ font-weight: bold; }}
-.total td {{ border-top: 1px solid #555; padding-top: 4px; font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
+.rtot {{ text-align: right; white-space: nowrap; font-size: {base:.1f}pt; }}
+.et {{ font-weight: bold; font-size: {base + 0.5:.1f}pt; }}
+.total td {{ border-top: 1px solid #555; padding-top: 4px; font-weight: bold; font-size: {base + 1:.1f}pt; }}
 .son {{ margin: 4px 0; }}
 .gracias {{ margin: 5px 0 3px; }}
 .pie {{ margin-top: 2px; }}
@@ -449,7 +451,7 @@ def ticket_prueba_html(extra: str = "", font_pt: float = DEFAULT_FONT_PT,
 body {{ font-family: 'Courier New', monospace; font-size: {base:.1f}pt; color: #000; }}
 div {{ line-height: {espaciado:.2f}; }}
 .centro {{ text-align: center; }}
-.mini {{ font-size: {base - 1.5:.1f}pt; color: #333; }}
+.mini {{ font-size: {base - 1:.1f}pt; color: #333; }}
 .linea {{ border-top: 1px dashed #000; margin: 3px 0; }}
 </style></head><body>
 <div class="centro"><b>PRUEBA DE IMPRESORA</b></div>
@@ -520,10 +522,10 @@ def _medir_alto(html: str, width_mm: float = _TICKET_WIDTH_MM,
 
 
 class GeometriaTicket(NamedTuple):
-    """Geometría horizontal del ticket en milímetros.
+    """Geometría del ticket en milímetros.
 
     La comparten el visor y la impresora para que la pantalla y el papel
-    coincidan: mismo ancho útil, mismo margen y misma posición en el papel.
+    coincidan: mismo ancho útil, mismos márgenes y desplazamiento.
     """
 
     contenido_mm: float        # ancho útil del texto
@@ -531,19 +533,35 @@ class GeometriaTicket(NamedTuple):
     visor_izq_mm: float        # margen izquierdo dentro de la tira del visor
     dispositivo_mm: float      # ancho del área de dibujo del QPrinter
     dispositivo_alto_mm: float  # alto del área de dibujo del QPrinter
+    visor_arriba_mm: float = _MARGIN_MM   # margen superior de la tira
+    visor_abajo_mm: float = _MARGIN_MM    # margen inferior de la tira
+
+
+def _desplazamiento(valor, maximo: float = 8.0) -> float:
+    """Normaliza un desplazamiento en mm (-maximo..maximo)."""
+    try:
+        numero = float(valor or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(-maximo, min(maximo, numero))
 
 
 def geometria_ticket(printer: QPrinter | None,
                      width_mm: float = _TICKET_WIDTH_MM,
-                     margin_mm: float = _MARGIN_MM) -> GeometriaTicket:
+                     margin_mm: float = _MARGIN_MM,
+                     offset_x_mm: float = 0.0,
+                     offset_y_mm: float = 0.0) -> GeometriaTicket:
     """Calcula el ancho útil real según el papel y los márgenes del driver.
 
     Con QPrinter el área de dibujo ya descuenta los márgenes configurados,
     así que el contenido se limita al ancho pedido y se centra dentro de esa
-    área (nunca se estira al ancho completo del papel).
+    área (nunca se estira al ancho completo del papel). El desplazamiento
+    mueve el contenido dentro de la tira del visor y del papel.
     """
     ancho = max(20.0, float(width_mm or _TICKET_WIDTH_MM))
     margen = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
+    offset_x = _desplazamiento(offset_x_mm)
+    offset_y = _desplazamiento(offset_y_mm)
     dispositivo_mm = ancho
     dispositivo_alto_mm = 297.0
     if printer is not None:
@@ -559,8 +577,13 @@ def geometria_ticket(printer: QPrinter | None,
             pass
     contenido = min(max(1.0, ancho - 2 * margen), dispositivo_mm)
     contenido = max(contenido, min(20.0, dispositivo_mm))
-    return GeometriaTicket(contenido, contenido + 2 * margen, margen,
-                           dispositivo_mm, dispositivo_alto_mm)
+    izq = min(max(0.0, margen + offset_x), ancho)
+    der = max(0.0, margen - offset_x)
+    visor = min(ancho, izq + contenido + der)
+    arriba = max(0.0, margen + offset_y)
+    abajo = max(0.0, margen - offset_y)
+    return GeometriaTicket(contenido, visor, izq, dispositivo_mm,
+                           dispositivo_alto_mm, arriba, abajo)
 
 
 def dpi_para_impresion(printer: QPrinter | None,
@@ -728,7 +751,9 @@ def _destino_pdf_prueba() -> Path | None:
 def _preparar_impresora(printer_name: str = "", modo: str = "",
                         html: str = "", copias: int = 1,
                         width_mm: float = _TICKET_WIDTH_MM,
-                        margin_mm: float = _MARGIN_MM) -> QPrinter | None:
+                        margin_mm: float = _MARGIN_MM,
+                        offset_x_mm: float = 0.0,
+                        offset_y_mm: float = 0.0) -> QPrinter | None:
     """Crea el QPrinter usando SIEMPRE un tamaño soportado por el driver.
 
     Reglas:
@@ -815,8 +840,17 @@ def _preparar_impresora(printer_name: str = "", modo: str = "",
                        if "papel corto" in aplicado else ""))
 
     margen = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
+    # Los desplazamientos consumen el margen del lado hacia el que se mueve
+    # el ticket: a la izquierda/arriba reducen el margen respectivo; a la
+    # derecha/abajo hacen lo mismo con el otro lado.
+    offset_x = _desplazamiento(offset_x_mm)
+    offset_y = _desplazamiento(offset_y_mm)
+    izquierda = max(0.0, margen + min(0.0, offset_x))
+    derecha = max(0.0, margen - max(0.0, offset_x))
+    arriba = max(0.0, margen + min(0.0, offset_y))
+    abajo = max(0.0, margen - max(0.0, offset_y))
     printer.setPageMargins(
-        QMarginsF(margen, margen, margen, margen),
+        QMarginsF(izquierda, arriba, derecha, abajo),
         QPageLayout.Unit.Millimeter)
     _log_impresora(name, actual_mm, modo, aplicado, soportadas)
     return printer
@@ -839,7 +873,9 @@ def _log_impresora(name: str, actual_mm, modo: str, aplicado: str,
 
 def escala_necesaria(printer: QPrinter, html: str,
                      width_mm: float = _TICKET_WIDTH_MM,
-                     margin_mm: float = _MARGIN_MM) -> float:
+                     margin_mm: float = _MARGIN_MM,
+                     offset_x_mm: float = 0.0,
+                     offset_y_mm: float = 0.0) -> float:
     """Escala (<= 1.0) que necesita el ticket para caber en una página.
 
     Usa el mismo ancho útil que el visor y el pintado; si se midiera con el
@@ -847,7 +883,8 @@ def escala_necesaria(printer: QPrinter, html: str,
     """
     try:
         res = float(printer.resolution()) or 96.0
-        geo = geometria_ticket(printer, width_mm, margin_mm)
+        geo = geometria_ticket(printer, width_mm, margin_mm,
+                               offset_x_mm, offset_y_mm)
         doc = _documento(html)
         doc.setTextWidth(max(1.0, geo.contenido_mm * res / 25.4))
         alto_doc = float(doc.size().height())
@@ -870,7 +907,9 @@ def _escala_para_caber(alto_pagina: float, alto_doc: float,
 def _imprimir_una_pagina(html: str, printer: QPrinter,
                          reducir: bool = True,
                          width_mm: float = _TICKET_WIDTH_MM,
-                         margin_mm: float = _MARGIN_MM) -> bool:
+                         margin_mm: float = _MARGIN_MM,
+                         offset_x_mm: float = 0.0,
+                         offset_y_mm: float = 0.0) -> bool:
     """Dibuja el ticket en UNA sola página, igual que la vista previa.
 
     No usa QTextDocument.print() (que pagina el contenido y era el origen de
@@ -881,27 +920,42 @@ def _imprimir_una_pagina(html: str, printer: QPrinter,
     OJO: con QPrinter el origen del QPainter YA está en el borde del área
     imprimible (los márgenes configurados se descuentan solos), por lo que no
     se debe volver a trasladar por el margen: eso corría el ticket a la
-    derecha y recortaba el lado derecho respecto del visor.
+    derecha y recortaba el lado derecho respecto del visor. Los desplazamientos
+    mueven el contenido a izquierda/derecha y arriba/abajo: el margen del lado
+    hacia el que se mueve se reduce en `_preparar_impresora` y aquí el
+    contenido se ancla a ese lado.
     """
     try:
         res = float(printer.resolution()) or 96.0
         per_mm = res / 25.4
         dev_w = max(1, int(printer.width()))
         dev_h = max(1, int(printer.height()))
-        geo = geometria_ticket(printer, width_mm, margin_mm)
+        geo = geometria_ticket(printer, width_mm, margin_mm,
+                               offset_x_mm, offset_y_mm)
         contenido_px = max(1.0, geo.contenido_mm * per_mm)
         doc = _documento(html)
         doc.setTextWidth(contenido_px)
         alto_doc = float(doc.size().height())
         escala = (_escala_para_caber(float(dev_h), alto_doc)
                   if reducir else 1.0)
+        offset_x = _desplazamiento(offset_x_mm)
+        offset_y = _desplazamiento(offset_y_mm)
         painter = QPainter(printer)
         try:
             painter.setClipRect(0, 0, dev_w, dev_h)
-            # El contenido se centra en el área de dibujo: en papel angosto
-            # (58 mm) ocupa todo; en papel ancho (A4/Carta) queda centrado.
-            x = max(0.0, (dev_w - contenido_px * escala) / 2.0)
-            painter.translate(x, 0.0)
+            if offset_x < 0:
+                # Se movió a la izquierda: el contenido arranca en el borde
+                # del área de dibujo (el margen izquierdo ya se redujo).
+                x = 0.0
+            elif offset_x > 0:
+                # Se movió a la derecha: anclado al borde derecho del área.
+                x = max(0.0, dev_w - contenido_px * escala)
+            else:
+                # Centrado en el área de dibujo: en papel angosto (58 mm)
+                # ocupa todo; en papel ancho (A4/Carta) queda centrado.
+                x = max(0.0, (dev_w - contenido_px * escala) / 2.0)
+            y = (offset_y * per_mm) if offset_y > 0 else 0.0
+            painter.translate(x, y)
             if escala < 1.0:
                 painter.scale(escala, escala)
             doc.drawContents(painter)
@@ -941,24 +995,29 @@ def advertencia_papel(printer: QPrinter, html: str,
 def imprimir_ticket(html: str, printer_name: str = "", modo_papel: str = "",
                     copias: int = 1, width_mm: float = _TICKET_WIDTH_MM,
                     margin_mm: float = _MARGIN_MM,
-                    reducir: bool = True) -> bool:
+                    reducir: bool = True,
+                    offset_x_mm: float = 0.0,
+                    offset_y_mm: float = 0.0) -> bool:
     """Imprime el ticket en la impresora indicada (o la predeterminada).
 
     True si se envió a imprimir. False si no hay impresora válida o la
     seleccionada es un PDF/XPS (salvo en modo de prueba POS_PRINT_TEST=1).
     """
     printer = _preparar_impresora(printer_name, modo_papel, html, copias,
-                                  width_mm, margin_mm)
+                                  width_mm, margin_mm, offset_x_mm, offset_y_mm)
     if printer is None:
         return False
-    return _imprimir_una_pagina(html, printer, reducir, width_mm, margin_mm)
+    return _imprimir_una_pagina(html, printer, reducir, width_mm, margin_mm,
+                                offset_x_mm, offset_y_mm)
 
 
 def imprimir_ticket_con_dialogo(html: str, printer_name: str = "",
                                 modo_papel: str = "", copias: int = 1,
                                 width_mm: float = _TICKET_WIDTH_MM,
                                 margin_mm: float = _MARGIN_MM,
-                                reducir: bool = True) -> bool:
+                                reducir: bool = True,
+                                offset_x_mm: float = 0.0,
+                                offset_y_mm: float = 0.0) -> bool:
     """Imprime mostrando el menú de impresión de Windows (Imprimir/Cancelar).
 
     Devuelve False si el usuario cancela o no hay impresora válida.
@@ -966,13 +1025,14 @@ def imprimir_ticket_con_dialogo(html: str, printer_name: str = "",
     from PyQt6.QtWidgets import QDialog, QPrintDialog
 
     printer = _preparar_impresora(printer_name, modo_papel, html, copias,
-                                  width_mm, margin_mm)
+                                  width_mm, margin_mm, offset_x_mm, offset_y_mm)
     if printer is None:
         return False
     dialog = QPrintDialog(printer)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
-    return _imprimir_una_pagina(html, printer, reducir, width_mm, margin_mm)
+    return _imprimir_una_pagina(html, printer, reducir, width_mm, margin_mm,
+                                offset_x_mm, offset_y_mm)
 
 
 def previsualizar_ticket(html: str, printer_name: str = "",
@@ -991,7 +1051,9 @@ def previsualizar_ticket(html: str, printer_name: str = "",
     printer = _preparar_impresora(
         printer_name, modo_papel, html,
         width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
-        margin_mm=ajustes.get("margin_mm", _MARGIN_MM))
+        margin_mm=ajustes.get("margin_mm", _MARGIN_MM),
+        offset_x_mm=ajustes.get("offset_x_mm", 0.0),
+        offset_y_mm=ajustes.get("offset_y_mm", 0.0))
     if printer is None:
         return False
     dialog = TicketPreviewDialog(html, printer_name, modo_papel, parent,
@@ -1028,12 +1090,16 @@ def imprimir_ticket_venta(sale, company: dict, db=None,
             html, name, modo,
             width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
             margin_mm=ajustes.get("margin_mm", _MARGIN_MM),
-            reducir=ajustes.get("scale_mode", SCALE_FIT) != SCALE_REAL)
+            reducir=ajustes.get("scale_mode", SCALE_FIT) != SCALE_REAL,
+            offset_x_mm=ajustes.get("offset_x_mm", 0.0),
+            offset_y_mm=ajustes.get("offset_y_mm", 0.0))
     return imprimir_ticket(
         html, name, modo,
         width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
         margin_mm=ajustes.get("margin_mm", _MARGIN_MM),
-        reducir=ajustes.get("scale_mode", SCALE_FIT) != SCALE_REAL)
+        reducir=ajustes.get("scale_mode", SCALE_FIT) != SCALE_REAL,
+        offset_x_mm=ajustes.get("offset_x_mm", 0.0),
+        offset_y_mm=ajustes.get("offset_y_mm", 0.0))
 
 
 def imprimir_prueba(printer_name: str = "", db=None) -> bool:
@@ -1046,7 +1112,9 @@ def imprimir_prueba(printer_name: str = "", db=None) -> bool:
     return imprimir_ticket(
         html, printer_name, modo,
         width_mm=ajustes.get("width_mm", _TICKET_WIDTH_MM),
-        margin_mm=ajustes.get("margin_mm", _MARGIN_MM))
+        margin_mm=ajustes.get("margin_mm", _MARGIN_MM),
+        offset_x_mm=ajustes.get("offset_x_mm", 0.0),
+        offset_y_mm=ajustes.get("offset_y_mm", 0.0))
 
 
 # ---------- configuración de impresora (app_config) ----------
@@ -1126,6 +1194,8 @@ def get_ticket_settings(db) -> dict:
             "width_mm": _TICKET_WIDTH_MM,
             "line_spacing": DEFAULT_LINE_SPACING,
             "scale_mode": SCALE_FIT,
+            "offset_x_mm": 0.0,
+            "offset_y_mm": 0.0,
         }
     modo = _get_config(db, "ticket_scale_mode", SCALE_FIT)
     return {
@@ -1135,6 +1205,8 @@ def get_ticket_settings(db) -> dict:
         "line_spacing": _num_config(db, "ticket_line_spacing",
                                     DEFAULT_LINE_SPACING, 1.0, 2.0),
         "scale_mode": modo if modo in SCALE_MODES else SCALE_FIT,
+        "offset_x_mm": _num_config(db, "ticket_offset_x_mm", 0.0, -8, 8),
+        "offset_y_mm": _num_config(db, "ticket_offset_y_mm", 0.0, -8, 8),
     }
 
 
@@ -1142,7 +1214,9 @@ def save_ticket_settings(db, font_pt: float = DEFAULT_FONT_PT,
                          margin_mm: float = _MARGIN_MM,
                          width_mm: float = _TICKET_WIDTH_MM,
                          line_spacing: float = DEFAULT_LINE_SPACING,
-                         scale_mode: str = SCALE_FIT) -> None:
+                         scale_mode: str = SCALE_FIT,
+                         offset_x_mm: float = 0.0,
+                         offset_y_mm: float = 0.0) -> None:
     """Guarda los parámetros de impresión del ticket (app_config)."""
     _set_config(db, "ticket_font_pt", f"{float(font_pt):.1f}")
     _set_config(db, "ticket_margin_mm", f"{float(margin_mm):.1f}")
@@ -1150,6 +1224,10 @@ def save_ticket_settings(db, font_pt: float = DEFAULT_FONT_PT,
     _set_config(db, "ticket_line_spacing", f"{float(line_spacing):.2f}")
     _set_config(db, "ticket_scale_mode",
                 scale_mode if scale_mode in SCALE_MODES else SCALE_FIT)
+    _set_config(db, "ticket_offset_x_mm",
+                f"{_desplazamiento(offset_x_mm):.1f}")
+    _set_config(db, "ticket_offset_y_mm",
+                f"{_desplazamiento(offset_y_mm):.1f}")
 
 
 def save_paper_mode(db, modo: str) -> None:

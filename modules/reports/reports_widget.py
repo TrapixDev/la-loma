@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 
 from utils.helpers import (
     ajustar_anchos_encabezado,
+    csv_seguro,
     format_currency,
     EmptyStateTable,
     NoWheelSpinBox,
@@ -39,7 +40,9 @@ from modules.documentos import generar_nota_credito
 from modules.reports.detail_dialogs import (
     CreditNoteDetailDialog,
     CreditPaymentDetailDialog,
+    DetalleMesDialog,
     ExpenseDetailDialog,
+    GastosCategoriaDialog,
     SaleDetailDialog,
     reimprimir_venta,
 )
@@ -71,11 +74,7 @@ def _fmt_day(value) -> str:
     return text
 
 
-def _csv_seguro(valor):
-    """Evita fórmulas al abrir el CSV en una hoja de cálculo."""
-    if isinstance(valor, str) and valor[:1] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + valor
-    return valor
+
 
 
 class ExpenseDialog(QDialog):
@@ -585,8 +584,14 @@ class ReportsWidget(QWidget):
         self.monthly_table = self._make_table(
             ["Mes", "Ventas", "Ingresos", "Egresos", "Ganancia"],
             "Sin datos mensuales.")
+        self.monthly_table.doubleClicked.connect(self._open_month_detail)
+        self.monthly_table.setToolTip(
+            "Doble clic para ver el detalle del mes")
         self.category_table = self._make_table(
             ["Categoría", "N°", "Total"], "Sin gastos por categoría.")
+        self.category_table.doubleClicked.connect(self._open_category_detail)
+        self.category_table.setToolTip(
+            "Doble clic para ver los gastos de esa categoría")
         self.year_page = QWidget()
         year_layout = QVBoxLayout(self.year_page)
         year_layout.setContentsMargins(0, 0, 0, 0)
@@ -780,6 +785,39 @@ class ReportsWidget(QWidget):
             return
         SaleDetailDialog(self.services, sale_id, parent=self).exec()
 
+    def _open_month_detail(self, index=None) -> None:
+        """Detalle del mes seleccionado en la vista anual (doble clic)."""
+        if not self.year_button.isChecked():
+            return
+        row = self.monthly_table.currentRow()
+        if index is not None and hasattr(index, "row"):
+            row = index.row()
+        breakdown = self._data.get("breakdown") or []
+        if row < 0 or row >= len(breakdown):
+            return
+        month = int(breakdown[row].get("month") or 0)
+        if not month:
+            return
+        year = int(self.year_combo.currentData())
+        DetalleMesDialog(self.services, year, month, parent=self).exec()
+
+    def _open_category_detail(self, index=None) -> None:
+        """Gastos del año para la categoría seleccionada (doble clic)."""
+        if not self.year_button.isChecked():
+            return
+        row = self.category_table.currentRow()
+        if index is not None and hasattr(index, "row"):
+            row = index.row()
+        categorias = self._data.get("categories") or []
+        if row < 0 or row >= len(categorias):
+            return
+        category = str(categorias[row].get("category") or "")
+        if not category:
+            return
+        year = int(self.year_combo.currentData())
+        GastosCategoriaDialog(self.services, year, category,
+                              parent=self).exec()
+
     def _anular_sale(self) -> None:
         sale = self._selected_sale()
         if sale is None:
@@ -883,7 +921,7 @@ class ReportsWidget(QWidget):
                     writer.writerow([])
                     writer.writerow(["Categoría de gasto", "N°", "Total"])
                     for row in self._data.get("categories", []):
-                        writer.writerow([_csv_seguro(row["category"]),
+                        writer.writerow([csv_seguro(row["category"]),
                                          row["count"], row["total"]])
                 else:
                     writer.writerow(["Día", "Ventas", "Ingresos", "Egresos", "Ganancia"])

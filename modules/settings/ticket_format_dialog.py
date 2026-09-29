@@ -30,6 +30,7 @@ from modules.documentos.ticket import (
     SCALE_FIT,
     SCALE_MODES,
     TICKET_FORMAT_DEFAULTS,
+    GeometriaTicket,
     _MARGIN_MM,
     _TICKET_WIDTH_MM,
     get_paper_mode,
@@ -206,11 +207,28 @@ class TicketFormatDialog(QDialog):
         self.ticket_width_spin.setSingleStep(2.0)
         self.ticket_width_spin.setDecimals(0)
         self.ticket_width_spin.setSuffix(" mm")
+        self.ticket_offset_x_spin = NoWheelSpinBox()
+        self.ticket_offset_x_spin.setRange(-8.0, 8.0)
+        self.ticket_offset_x_spin.setSingleStep(0.5)
+        self.ticket_offset_x_spin.setDecimals(1)
+        self.ticket_offset_x_spin.setSuffix(" mm")
+        self.ticket_offset_x_spin.setToolTip(
+            "Mueve el ticket a la izquierda (negativo) o a la derecha "
+            "(positivo) dentro del papel.")
+        self.ticket_offset_y_spin = NoWheelSpinBox()
+        self.ticket_offset_y_spin.setRange(-8.0, 8.0)
+        self.ticket_offset_y_spin.setSingleStep(0.5)
+        self.ticket_offset_y_spin.setDecimals(1)
+        self.ticket_offset_y_spin.setSuffix(" mm")
+        self.ticket_offset_y_spin.setToolTip(
+            "Mueve el ticket hacia arriba (negativo) o hacia abajo "
+            "(positivo) dentro del papel.")
         self.ticket_scale_combo = NoWheelComboBox()
         for key, text in SCALE_MODES.items():
             self.ticket_scale_combo.addItem(text, key)
         for spin in (self.ticket_font_spin, self.ticket_line_spacing_spin,
-                     self.ticket_margin_spin, self.ticket_width_spin):
+                     self.ticket_margin_spin, self.ticket_width_spin,
+                     self.ticket_offset_x_spin, self.ticket_offset_y_spin):
             spin.valueChanged.connect(
                 lambda _value: self._refresh_ticket_preview())
         self.ticket_scale_combo.currentIndexChanged.connect(
@@ -223,6 +241,10 @@ class TicketFormatDialog(QDialog):
                                  self.ticket_margin_spin)
         print_format_form.addRow(self._label("Ancho de impresión:"),
                                  self.ticket_width_spin)
+        print_format_form.addRow(self._label("Desplaz. horizontal:"),
+                                 self.ticket_offset_x_spin)
+        print_format_form.addRow(self._label("Desplaz. vertical:"),
+                                 self.ticket_offset_y_spin)
         print_format_form.addRow(self._label("Ajuste al papel:"),
                                  self.ticket_scale_combo)
         format_controls_layout.addWidget(print_format_group)
@@ -306,15 +328,22 @@ class TicketFormatDialog(QDialog):
             "line_spacing": self.ticket_line_spacing_spin.value(),
             "margin_mm": self.ticket_margin_spin.value(),
             "width_mm": self.ticket_width_spin.value(),
+            "offset_x_mm": self.ticket_offset_x_spin.value(),
+            "offset_y_mm": self.ticket_offset_y_spin.value(),
             "scale_mode": self.ticket_scale_combo.currentData() or SCALE_FIT,
         }
 
     def _apply_ticket_print_settings(self, settings: dict) -> None:
-        self.ticket_font_spin.setValue(float(settings.get("font_pt", 12.0)))
+        self.ticket_font_spin.setValue(
+            float(settings.get("font_pt", DEFAULT_FONT_PT)))
         self.ticket_line_spacing_spin.setValue(
             float(settings.get("line_spacing", 1.35)))
         self.ticket_margin_spin.setValue(float(settings.get("margin_mm", 3.0)))
         self.ticket_width_spin.setValue(float(settings.get("width_mm", 80.0)))
+        self.ticket_offset_x_spin.setValue(
+            float(settings.get("offset_x_mm", 0.0)))
+        self.ticket_offset_y_spin.setValue(
+            float(settings.get("offset_y_mm", 0.0)))
         scale_index = self.ticket_scale_combo.findData(
             settings.get("scale_mode", SCALE_FIT))
         if scale_index >= 0:
@@ -398,7 +427,20 @@ class TicketFormatDialog(QDialog):
                 formato=self._ticket_format_values())
             self.ticket_preview_html = html
             pixmap = render_ticket(
-                html, settings["width_mm"], settings["margin_mm"])
+                html, settings["width_mm"], settings["margin_mm"],
+                geometria=GeometriaTicket(
+                    contenido_mm=max(1.0, settings["width_mm"]
+                                     - 2 * settings["margin_mm"]),
+                    visor_mm=settings["width_mm"],
+                    visor_izq_mm=max(0.0, settings["margin_mm"]
+                                     + settings["offset_x_mm"]),
+                    dispositivo_mm=settings["width_mm"],
+                    dispositivo_alto_mm=297.0,
+                    visor_arriba_mm=max(0.0, settings["margin_mm"]
+                                        + settings["offset_y_mm"]),
+                    visor_abajo_mm=max(0.0, settings["margin_mm"]
+                                       - settings["offset_y_mm"]),
+                ))
             self._ticket_preview_pixmap = pixmap
             viewport_width = self.ticket_preview_scroll.viewport().width()
             preview_width = max(240, min(340, viewport_width - 12))
@@ -427,7 +469,8 @@ class TicketFormatDialog(QDialog):
                 save_ticket_settings(
                     db, settings["font_pt"], settings["margin_mm"],
                     settings["width_mm"], settings["line_spacing"],
-                    settings["scale_mode"])
+                    settings["scale_mode"], settings["offset_x_mm"],
+                    settings["offset_y_mm"])
             except Exception as exc:
                 self.ticket_format_status.setText(
                     f"No se pudo guardar el formato: {exc}")
@@ -458,6 +501,8 @@ class TicketFormatDialog(QDialog):
                 "line_spacing": DEFAULT_LINE_SPACING,
                 "margin_mm": _MARGIN_MM,
                 "width_mm": _TICKET_WIDTH_MM,
+                "offset_x_mm": 0.0,
+                "offset_y_mm": 0.0,
                 "scale_mode": SCALE_FIT,
             })
             self.ticket_logo_width_spin.setEnabled(True)

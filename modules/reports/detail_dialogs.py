@@ -1,13 +1,18 @@
-"""Diálogos de detalle de Reportes: venta, gasto, abono y nota de crédito.
+"""Diálogos de detalle de Reportes: venta, gasto, abono, nota y meses.
 
-Se abren con doble clic en los movimientos del día y en el historial de
-ventas. Son de solo lectura (el gasto también) y el detalle de venta permite
-reimprimir la factura reutilizando el flujo existente.
+Se abren con doble clic en los movimientos del día, el historial de ventas,
+los meses del reporte anual y las categorías de gasto. Son de solo lectura
+(el gasto también); el detalle de venta permite reimprimir la factura y el
+detalle del mes exporta el resumen a CSV.
 """
+
+import calendar
+import csv
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -20,7 +25,12 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from utils.helpers import EmptyStateTable, format_currency
+from utils.helpers import EmptyStateTable, csv_seguro, format_currency
+
+MONTH_NAMES = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+    "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+]
 
 
 def _texto(valor, default: str = "—") -> str:
@@ -420,3 +430,182 @@ class CreditNoteDetailDialog(_DetalleBase):
         self._valor("Registrada por", _texto(nota.get("user_name")))
         self._valor("Caja", _texto(nota.get("station")))
         self._botones()
+
+
+# ---------- reporte anual: mes y categorías ----------
+
+def _rango_mes(year: int, month: int) -> tuple[str, str]:
+    """Primer y último día del mes (formato AAAA-MM-DD)."""
+    ultimo = calendar.monthrange(int(year), int(month))[1]
+    return (f"{int(year):04d}-{int(month):02d}-01",
+            f"{int(year):04d}-{int(month):02d}-{ultimo:02d}")
+
+
+def escribir_csv_mes(ruta, services: dict, year: int, month: int) -> None:
+    """CSV del mes: resumen, ventas y gastos (sin abrir diálogos)."""
+    start, end = _rango_mes(year, month)
+    report = (services or {}).get("reports")
+    summary = report.full_summary(start, end) if report is not None else {}
+    ventas = report.list_sales(start, end, limit=1000) if report is not None else []
+    gastos_service = (services or {}).get("expenses")
+    gastos = (gastos_service.get_expenses(start, end, limit=1000)
+              if gastos_service is not None else [])
+    nombre_mes = MONTH_NAMES[int(month) - 1] if 1 <= int(month) <= 12 else str(month)
+    with open(ruta, "w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Resumen", f"{nombre_mes} {int(year)}"])
+        writer.writerow(["Ventas", int(summary.get("sale_count", 0) or 0)])
+        writer.writerow(["Ingresos", summary.get("ingresos", 0.0)])
+        writer.writerow(["Costo de fabricación", summary.get("cost", 0.0)])
+        writer.writerow(["Gastos", summary.get("expenses", 0.0)])
+        writer.writerow(["Ganancia neta", summary.get("net_profit", 0.0)])
+        writer.writerow(["IVA facturado", summary.get("tax_amount", 0.0)])
+        writer.writerow(["Notas de crédito", summary.get("credit_notes", 0.0)])
+        writer.writerow([])
+        writer.writerow(["Ventas del mes"])
+        writer.writerow(["N°", "Fecha", "Cliente", "Total", "Pago", "Estado"])
+        for venta in ventas:
+            writer.writerow([
+                csv_seguro(venta.get("invoice_number") or venta.get("id")),
+                str(venta.get("created_at") or "")[:16],
+                csv_seguro(venta.get("client_name") or ""),
+                float(venta.get("total") or 0),
+                csv_seguro(venta.get("payment_method") or ""),
+                csv_seguro(venta.get("status") or ""),
+            ])
+        writer.writerow([])
+        writer.writerow(["Gastos del mes"])
+        writer.writerow(["Fecha", "Categoría", "Descripción", "Método", "Monto"])
+        for gasto in gastos:
+            writer.writerow([
+                str(getattr(gasto, "expense_date", "") or ""),
+                csv_seguro(getattr(gasto, "category", "")),
+                csv_seguro(getattr(gasto, "description", "") or ""),
+                csv_seguro(getattr(gasto, "payment_method", "") or ""),
+                float(getattr(gasto, "amount", 0) or 0),
+            ])
+
+
+class DetalleMesDialog(_DetalleBase):
+    """Resumen del mes elegido en la vista anual de Reportes."""
+
+    def __init__(self, services: dict, year: int, month: int, parent=None):
+        nombre = (MONTH_NAMES[int(month) - 1]
+                  if 1 <= int(month) <= 12 else str(month))
+        super().__init__(f"Detalle de {nombre} {int(year)}", parent)
+        self.services = services or {}
+        self._year = int(year)
+        self._month = int(month)
+        self._resumen: dict = {}
+        report = self.services.get("reports")
+        if report is None:
+            self._titulo("Reporte no disponible")
+            self._meta("No se pudo consultar el período seleccionado.")
+            self._botones()
+            return
+        try:
+            self._resumen = dict(report.full_summary(*_rango_mes(year, month)))
+        except Exception as exc:
+            self._titulo("Reporte no disponible")
+            self._meta(f"No se pudo consultar el mes: {exc}")
+            self._botones()
+            return
+
+        start, end = _rango_mes(year, month)
+        resumen = self._resumen
+        self._titulo(f"{nombre} {int(year)}")
+        self._meta(f"Del {start} al {end}")
+        self._separador()
+        self._valor("Ventas", str(int(resumen.get("sale_count", 0) or 0)))
+        self._valor("Ingresos", format_currency(resumen.get("ingresos", 0.0)))
+        self._valor("Costo de fabricación",
+                    format_currency(resumen.get("cost", 0.0)))
+        self._valor("Gastos", format_currency(resumen.get("expenses", 0.0)))
+        neto = float(resumen.get("net_profit", 0.0) or 0)
+        self._valor("Ganancia neta", format_currency(neto), negrita=True,
+                    color="#2fbf71" if neto >= 0 else "#ef4444")
+        self._valor("IVA facturado",
+                    format_currency(resumen.get("tax_amount", 0.0)))
+        self._valor("Notas de crédito",
+                    format_currency(resumen.get("credit_notes", 0.0)))
+
+        exportar = QPushButton("Exportar mes a CSV")
+        exportar.setObjectName("secondaryButton")
+        exportar.clicked.connect(self._exportar)
+        self._botones([exportar])
+
+    def _exportar(self) -> None:
+        nombre = f"reporte_{self._year:04d}-{self._month:02d}.csv"
+        ruta, _ = QFileDialog.getSaveFileName(
+            self, "Exportar mes", nombre, "Archivo CSV (*.csv)")
+        if not ruta:
+            return
+        try:
+            escribir_csv_mes(ruta, self.services, self._year, self._month)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Error", f"No se pudo guardar el archivo:\n{exc}")
+            return
+        QMessageBox.information(self, "Exportado",
+                                f"Reporte guardado en:\n{ruta}")
+
+
+class GastosCategoriaDialog(_DetalleBase):
+    """Gastos del año en una categoría (doble clic al detalle del gasto)."""
+
+    def __init__(self, services: dict, year: int, category: str, parent=None):
+        super().__init__(f"Gastos de {category} {int(year)}", parent)
+        self.services = services or {}
+        self.categoria = str(category or "")
+        servicio = self.services.get("expenses")
+        try:
+            self._gastos = list(servicio.get_expenses_by_category(
+                self.categoria, f"{int(year):04d}-01-01",
+                f"{int(year):04d}-12-31")) if servicio is not None else []
+        except Exception:
+            self._gastos = []
+        self.total = sum(float(g.amount or 0) for g in self._gastos)
+        self._meta(
+            f"Año {int(year)}  |  {len(self._gastos)} gasto(s)  |  "
+            f"Total {format_currency(self.total)}")
+        self._subtitulo("Gastos registrados")
+        self._tabla = EmptyStateTable(
+            "No hay gastos de esta categoría en el año.", 0, 4)
+        self._tabla.setHorizontalHeaderLabels(
+            ["Fecha", "Descripción", "Método", "Monto"])
+        self._tabla.horizontalHeader().setObjectName("tableHeader")
+        self._tabla.verticalHeader().setVisible(False)
+        self._tabla.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._tabla.setAlternatingRowColors(True)
+        self._tabla.setRowCount(len(self._gastos))
+        for row, gasto in enumerate(self._gastos):
+            valores = [
+                str(getattr(gasto, "expense_date", "") or "")[:10],
+                _texto(getattr(gasto, "description", ""), "(sin descripción)"),
+                _texto(getattr(gasto, "payment_method", "")).capitalize(),
+                format_currency(float(getattr(gasto, "amount", 0) or 0)),
+            ]
+            for column, valor in enumerate(valores):
+                item = QTableWidgetItem(str(valor))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, int(gasto.id or 0))
+                self._tabla.setItem(row, column, item)
+        header = self._tabla.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self._tabla.setMaximumHeight(320)
+        self._tabla.doubleClicked.connect(self._abrir_detalle)
+        self._layout.addWidget(self._tabla)
+        self._botones()
+
+    def _abrir_detalle(self, index=None) -> None:
+        row = index.row() if index is not None and hasattr(index, "row") \
+            else self._tabla.currentRow()
+        if row < 0 or row >= len(self._gastos):
+            return
+        gasto = self._gastos[row]
+        ExpenseDetailDialog(self.services, int(gasto.id or 0),
+                            parent=self).exec()

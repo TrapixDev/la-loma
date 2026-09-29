@@ -5,6 +5,13 @@ def format_currency(amount: float, currency: str = "CRC") -> str:
     return f"₡{amount:,.2f}"
 
 
+def csv_seguro(valor):
+    """Evita que un valor se interprete como fórmula al abrir el CSV."""
+    if isinstance(valor, str) and valor[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + valor
+    return valor
+
+
 _UNIDADES = (
     "", "UNO", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO",
     "NUEVE", "DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE",

@@ -40,6 +40,23 @@ class ExpenseService:
     def delete_expense(self, expense_id: int) -> bool:
         return self.db.execute_update("DELETE FROM expenses WHERE id = ?", (expense_id,))
 
+    def get_expenses_by_category(self, category: str, start: str = "",
+                                 end: str = "",
+                                 limit: int = 500) -> list[Expense]:
+        """Gastos de una categoría en un período (detalle del reporte)."""
+        sql = "SELECT * FROM expenses WHERE category = ?"
+        params: list[object] = [str(category)]
+        if start:
+            sql += " AND expense_date >= ?"
+            params.append(start)
+        if end:
+            sql += " AND expense_date <= ?"
+            params.append(end)
+        sql += " ORDER BY expense_date DESC, id DESC LIMIT ?"
+        params.append(int(limit))
+        rows = self.db.execute_query(sql, tuple(params))
+        return [Expense(**row) for row in rows]
+
     def get_expenses(self, start: str = "", end: str = "",
                      limit: int = 200) -> list[Expense]:
         sql = "SELECT * FROM expenses"

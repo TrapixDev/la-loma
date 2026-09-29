@@ -137,14 +137,14 @@ def test_detalle_movimientos_en_texto_plano():
 # ---------- CSV seguro ----------
 
 def test_csv_no_inyecta_formulas():
-    from modules.reports.reports_widget import _csv_seguro
+    from utils.helpers import csv_seguro
 
-    assert _csv_seguro("=SUM(A1)") == "'=SUM(A1)"
-    assert _csv_seguro("+1") == "'+1"
-    assert _csv_seguro("-1") == "'-1"
-    assert _csv_seguro("@x") == "'@x"
-    assert _csv_seguro("Renta") == "Renta"
-    assert _csv_seguro(1500) == 1500
+    assert csv_seguro("=SUM(A1)") == "'=SUM(A1)"
+    assert csv_seguro("+1") == "'+1"
+    assert csv_seguro("-1") == "'-1"
+    assert csv_seguro("@x") == "'@x"
+    assert csv_seguro("Renta") == "Renta"
+    assert csv_seguro(1500) == 1500
 
 
 # ---------- servidor ----------

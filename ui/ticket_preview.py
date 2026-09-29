@@ -66,8 +66,9 @@ def render_ticket(html: str, ancho_mm: float = _TICKET_WIDTH_MM,
         margen_izq_px = int(round(max(0.0, float(geometria.visor_izq_mm)) * px_mm))
         contenido_px = max(1.0, float(geometria.contenido_mm) * px_mm)
         margen_sup_px = int(round(
-            max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
-            * px_mm))
+            max(0.0, float(geometria.visor_arriba_mm)) * px_mm))
+        margen_inf_px = int(round(
+            max(0.0, float(geometria.visor_abajo_mm)) * px_mm))
     else:
         ancho_mm = max(20.0, float(ancho_mm or _TICKET_WIDTH_MM))
         margin_mm = max(0.0, float(margin_mm if margin_mm is not None else _MARGIN_MM))
@@ -75,11 +76,12 @@ def render_ticket(html: str, ancho_mm: float = _TICKET_WIDTH_MM,
         margen_izq_px = int(round(margin_mm * px_mm))
         contenido_px = max(1.0, visor_mm * px_mm - 2 * margen_izq_px)
         margen_sup_px = margen_izq_px
+        margen_inf_px = margen_izq_px
     ancho_px = max(1, int(round(visor_mm * px_mm)))
     doc = QTextDocument()
     doc.setHtml(html)
     doc.setTextWidth(contenido_px)
-    alto_px = max(1, int(doc.size().height()) + 2 * margen_sup_px)
+    alto_px = max(1, int(doc.size().height()) + margen_sup_px + margen_inf_px)
     imagen = QImage(ancho_px, alto_px, QImage.Format.Format_RGB32)
     imagen.fill(0xFFFFFFFF)
     painter = QPainter(imagen)
@@ -105,6 +107,8 @@ class TicketPreviewDialog(QDialog):
                                                 DEFAULT_LINE_SPACING))
         self._margins = float(self._ajustes.get("margin_mm", _MARGIN_MM))
         self._width = float(self._ajustes.get("width_mm", _TICKET_WIDTH_MM))
+        self._offset_x = float(self._ajustes.get("offset_x_mm", 0.0))
+        self._offset_y = float(self._ajustes.get("offset_y_mm", 0.0))
         self._scale_mode = self._ajustes.get("scale_mode", SCALE_FIT)
         self.setWindowTitle("Vista previa del ticket")
         self.setMinimumSize(980, 640)
@@ -244,6 +248,40 @@ class TicketPreviewDialog(QDialog):
         fila2.addLayout(col_ancho, 1)
         panel_layout.addLayout(fila2)
 
+        fila_offsets = QHBoxLayout()
+        fila_offsets.setSpacing(8)
+        col_dx = QVBoxLayout()
+        col_dx.setSpacing(2)
+        col_dx.addWidget(self._label("Desplaz. X:"))
+        self.offset_x_spin = NoWheelSpinBox()
+        self.offset_x_spin.setRange(-8.0, 8.0)
+        self.offset_x_spin.setSingleStep(0.5)
+        self.offset_x_spin.setDecimals(1)
+        self.offset_x_spin.setSuffix(" mm")
+        self.offset_x_spin.setToolTip(
+            "Mueve el ticket a la izquierda (negativo) o a la derecha "
+            "(positivo) dentro del papel.")
+        self.offset_x_spin.setValue(self._offset_x)
+        self.offset_x_spin.valueChanged.connect(self._aplicar_cambios)
+        col_dx.addWidget(self.offset_x_spin)
+        fila_offsets.addLayout(col_dx, 1)
+        col_dy = QVBoxLayout()
+        col_dy.setSpacing(2)
+        col_dy.addWidget(self._label("Desplaz. Y:"))
+        self.offset_y_spin = NoWheelSpinBox()
+        self.offset_y_spin.setRange(-8.0, 8.0)
+        self.offset_y_spin.setSingleStep(0.5)
+        self.offset_y_spin.setDecimals(1)
+        self.offset_y_spin.setSuffix(" mm")
+        self.offset_y_spin.setToolTip(
+            "Mueve el ticket hacia arriba (negativo) o hacia abajo "
+            "(positivo) dentro del papel.")
+        self.offset_y_spin.setValue(self._offset_y)
+        self.offset_y_spin.valueChanged.connect(self._aplicar_cambios)
+        col_dy.addWidget(self.offset_y_spin)
+        fila_offsets.addLayout(col_dy, 1)
+        panel_layout.addLayout(fila_offsets)
+
         fila3 = QHBoxLayout()
         fila3.setSpacing(8)
         col_inter = QVBoxLayout()
@@ -359,6 +397,8 @@ class TicketPreviewDialog(QDialog):
         self._spacing = float(self.spacing_spin.value())
         self._margins = float(self.margin_spin.value())
         self._width = float(self.width_spin.value())
+        self._offset_x = float(self.offset_x_spin.value())
+        self._offset_y = float(self.offset_y_spin.value())
         self._scale_mode = self.scale_combo.currentData() or SCALE_FIT
         if self._factory is not None:
             try:
@@ -377,7 +417,8 @@ class TicketPreviewDialog(QDialog):
         try:
             save_ticket_settings(
                 self._db, self._font, self._margins, self._width,
-                self._spacing, self._scale_mode)
+                self._spacing, self._scale_mode, self._offset_x,
+                self._offset_y)
             self.aviso_label.setText(
                 "Ajustes guardados como predeterminados de esta caja.")
             self.aviso_label.setVisible(True)
@@ -393,7 +434,8 @@ class TicketPreviewDialog(QDialog):
         Así el margen y el ancho de la pantalla son los que saldrán en el
         papel (papel angosto, márgenes físicos, área imprimible del driver).
         """
-        geo = (geometria_ticket(printer, self._width, self._margins)
+        geo = (geometria_ticket(printer, self._width, self._margins,
+                                self._offset_x, self._offset_y)
                if printer is not None else None)
         dpi = dpi_para_impresion(printer)
         if geo == self._geo and dpi == self._dpi:
@@ -411,7 +453,9 @@ class TicketPreviewDialog(QDialog):
         modo = self.papel_combo.currentData() or ""
         printer = _preparar_impresora(destino, modo, self._html,
                                       width_mm=self._width,
-                                      margin_mm=self._margins)
+                                      margin_mm=self._margins,
+                                      offset_x_mm=self._offset_x,
+                                      offset_y_mm=self._offset_y)
         geo = self._sincronizar_geometria(printer)
         if printer is None:
             self.imprimir_btn.setEnabled(False)
@@ -425,7 +469,8 @@ class TicketPreviewDialog(QDialog):
         pagina = printer.pageLayout().pageSize()
         mm = pagina.size(QPageSize.Unit.Millimeter)
         escala = escala_necesaria(printer, self._html,
-                                  self._width, self._margins)
+                                  self._width, self._margins,
+                                  self._offset_x, self._offset_y)
         detalle = f"Papel: {pagina.name()} ({mm.width():.0f}×{mm.height():.0f} mm)"
         if geo is not None:
             detalle += f" · contenido {geo.contenido_mm:.1f} mm"
@@ -455,17 +500,22 @@ class TicketPreviewDialog(QDialog):
             f"Impresora: {destino or '(predeterminada)'}",
             f"Ajustes: letra {self._font:.1f}pt · márgenes {self._margins:.1f}mm "
             f"· ancho {self._width:.0f}mm · interlineado {self._spacing:.2f} "
+            f"· desplazamiento X {self._offset_x:.1f}mm / Y {self._offset_y:.1f}mm "
             f"· ajuste {self._scale_mode}",
         ]
         printer = _preparar_impresora(destino, self.papel_combo.currentData() or "",
                                       self._html, width_mm=self._width,
-                                      margin_mm=self._margins)
+                                      margin_mm=self._margins,
+                                      offset_x_mm=self._offset_x,
+                                      offset_y_mm=self._offset_y)
         if printer is not None:
             pagina = printer.pageLayout().pageSize()
             mm = pagina.size(QPageSize.Unit.Millimeter)
             escala = escala_necesaria(printer, self._html,
-                                      self._width, self._margins)
-            geo = geometria_ticket(printer, self._width, self._margins)
+                                      self._width, self._margins,
+                                      self._offset_x, self._offset_y)
+            geo = geometria_ticket(printer, self._width, self._margins,
+                                   self._offset_x, self._offset_y)
             lineas.append(f"Papel usado: {pagina.name()} "
                           f"({mm.width():.1f} x {mm.height():.1f} mm)")
             lineas.append(
@@ -493,7 +543,9 @@ class TicketPreviewDialog(QDialog):
         try:
             ok = imprimir_ticket(self._html, destino, modo, copias,
                                  width_mm=self._width, margin_mm=self._margins,
-                                 reducir=self._scale_mode != SCALE_REAL)
+                                 reducir=self._scale_mode != SCALE_REAL,
+                                 offset_x_mm=self._offset_x,
+                                 offset_y_mm=self._offset_y)
         except Exception as exc:
             QMessageBox.warning(self, "Impresión",
                                 f"No se pudo imprimir:\n{exc}")

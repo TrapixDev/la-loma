@@ -399,21 +399,29 @@ def test_ticket_settings_roundtrip():
     assert inicial["font_pt"] == DEFAULT_FONT_PT
     assert inicial["margin_mm"] == 3.0
     assert inicial["scale_mode"] == "ajustar"
+    assert inicial["offset_x_mm"] == 0.0
+    assert inicial["offset_y_mm"] == 0.0
     save_ticket_settings(db, font_pt=14.0, margin_mm=5.0, width_mm=80.0,
-                         line_spacing=1.5, scale_mode="real")
+                         line_spacing=1.5, scale_mode="real",
+                         offset_x_mm=-3.0, offset_y_mm=1.5)
     ajustes = get_ticket_settings(db)
     assert ajustes["font_pt"] == 14.0
     assert ajustes["margin_mm"] == 5.0
     assert ajustes["line_spacing"] == 1.5
     assert ajustes["scale_mode"] == "real"
+    assert ajustes["offset_x_mm"] == -3.0
+    assert ajustes["offset_y_mm"] == 1.5
     # Valores fuera de rango se recortan.
     save_ticket_settings(db, font_pt=99.0, margin_mm=-4.0, width_mm=80.0,
-                         line_spacing=9.9, scale_mode="invalido")
+                         line_spacing=9.9, scale_mode="invalido",
+                         offset_x_mm=-99.0, offset_y_mm=99.0)
     ajustes = get_ticket_settings(db)
     assert ajustes["font_pt"] == 20.0
     assert ajustes["margin_mm"] == 0.0
     assert ajustes["line_spacing"] == 2.0
     assert ajustes["scale_mode"] == "ajustar"
+    assert ajustes["offset_x_mm"] == -8.0
+    assert ajustes["offset_y_mm"] == 8.0
     db.close()
 
 
@@ -710,6 +718,19 @@ def test_geometria_ticket_respeta_driver_y_ancho_configurado():
     assert geo.contenido_mm == pytest.approx(74.0)
     assert geo.visor_mm == pytest.approx(80.0)
 
+    # Desplazamientos: X negativo pega a la izquierda, Y positivo baja.
+    geo = geometria_ticket(_ImpresoraFalsa(74.0, 3269.9, 203), 80.0, 3.0,
+                           offset_x_mm=-3.0, offset_y_mm=2.0)
+    assert geo.visor_izq_mm == pytest.approx(0.0)
+    assert geo.visor_mm == pytest.approx(80.0, abs=0.2)
+    assert geo.visor_arriba_mm == pytest.approx(5.0)
+    assert geo.visor_abajo_mm == pytest.approx(1.0)
+
+    # Desplazamiento X positivo: margen izquierdo mayor dentro de la tira.
+    geo = geometria_ticket(None, 80.0, 3.0, offset_x_mm=2.0)
+    assert geo.visor_izq_mm == pytest.approx(5.0)
+    assert geo.visor_mm == pytest.approx(80.0)
+
 
 def test_visor_renderiza_con_la_geometria_del_papel():
     from modules.documentos.ticket import GeometriaTicket, ticket_html
@@ -767,3 +788,45 @@ def test_margenes_impresos_coinciden_con_el_visor():
     assert (ancho_pagina - x1) == pytest.approx(esperado, abs=1.0), \
         "margen derecho distinto al del visor (contenido recortado)"
     assert y0 == pytest.approx(3.0, abs=1.0), "margen superior"
+
+
+def test_desplazamiento_mueve_el_ticket_en_el_papel():
+    """Con X negativo el ticket usa el espacio de la izquierda y deja más
+    margen a la derecha; con Y positivo baja."""
+    pytest.importorskip("PyQt6.QtPdf")
+    from PyQt6.QtPrintSupport import QPrinterInfo
+
+    nombres = [p.printerName() for p in QPrinterInfo.availablePrinters()]
+    if "Microsoft Print to PDF" not in nombres:
+        pytest.skip("No está instalada la impresora virtual PDF")
+
+    from config import Config
+    from modules.documentos.ticket import imprimir_ticket, ticket_html
+
+    destino = os.path.join(PROJECT_DIR, "tests", ".tmp", "desplazado.pdf")
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    if os.path.exists(destino):
+        os.remove(destino)
+    original_modo = Config.PRINT_TEST_MODE
+    original_pdf = Config.PRINT_TEST_PDF
+    Config.PRINT_TEST_MODE = True
+    Config.PRINT_TEST_PDF = destino
+    try:
+        ok = imprimir_ticket(ticket_html(_venta(), dict(EMPRESA_BASE)),
+                             "Microsoft Print to PDF", "", width_mm=80.0,
+                             margin_mm=3.0, offset_x_mm=-3.0, offset_y_mm=2.0)
+        assert ok is True
+        assert os.path.isfile(destino)
+        ancho_pagina, x0, x1, y0 = _tinta_pdf_mm(destino)
+    finally:
+        Config.PRINT_TEST_MODE = original_modo
+        Config.PRINT_TEST_PDF = original_pdf
+        if os.path.exists(destino):
+            os.remove(destino)
+
+    assert x0 <= 1.0, "con X=-3 el contenido queda pegado a la izquierda"
+    assert (x1 - x0) == pytest.approx(74.0, abs=1.0)
+    assert (ancho_pagina - x1) >= 74.0, \
+        "a la derecha debe quedar más margen que antes del desplazamiento"
+    assert y0 == pytest.approx(5.0, abs=1.0), \
+        "con Y=2 el contenido baja 2 mm (3 de margen + 2)"

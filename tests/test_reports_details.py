@@ -343,3 +343,152 @@ def test_reimprimir_usa_el_flujo_compartido(monkeypatch):
     finally:
         widget.close()
     assert llamadas == [sale_id]
+
+
+# ---------- reporte anual: detalle del mes y gastos por categoría ----------
+
+def _mes_actual() -> tuple[int, int]:
+    from datetime import date
+
+    hoy = date.today()
+    return hoy.year, hoy.month
+
+
+def test_detalle_mes_cuadra_con_el_reporte():
+    from modules.reports.detail_dialogs import DetalleMesDialog
+    from utils.helpers import format_currency
+
+    db = _db()
+    services = _services(db)
+    year, month = _mes_actual()
+    _seed_sale(db, total=25000.0, method="efectivo")
+    services["expenses"].add_expense(8000.0, "Renta", "Local", "efectivo",
+                                     f"{year:04d}-{month:02d}-15")
+
+    fila = next(r for r in services["reports"].monthly_breakdown(year)
+                if r["month"] == month)
+    dialog = DetalleMesDialog(services, year, month)
+    try:
+        assert dialog.filas["Ventas"] == str(fila["sale_count"])
+        assert dialog.filas["Ingresos"] == format_currency(fila["ingresos"])
+        assert dialog.filas["Gastos"] == format_currency(fila["expenses"])
+        assert dialog.filas["Ganancia neta"] == format_currency(fila["net_profit"])
+    finally:
+        dialog.close()
+
+
+def test_exportar_csv_mes(tmp_path):
+    import csv
+
+    from modules.reports.detail_dialogs import escribir_csv_mes
+
+    db = _db()
+    services = _services(db)
+    year, month = _mes_actual()
+    _seed_sale(db, total=25000.0, method="efectivo", client_name="Ana")
+    services["expenses"].add_expense(8000.0, "Renta", "Local", "efectivo",
+                                     f"{year:04d}-{month:02d}-15")
+    ruta = tmp_path / "mes.csv"
+    escribir_csv_mes(ruta, services, year, month)
+
+    with ruta.open(encoding="utf-8-sig", newline="") as handle:
+        filas = list(csv.reader(handle))
+    assert any(f and f[0] == "Ganancia neta" for f in filas)
+    assert any(f and f[0] == "Ventas del mes" for f in filas)
+    assert any(f and f[0] == "Gastos del mes" for f in filas)
+    texto = ruta.read_text(encoding="utf-8-sig")
+    assert "Ana" in texto and "Renta" in texto
+
+
+def test_gastos_categoria_lista_y_abre_detalle(monkeypatch):
+    from modules.reports import detail_dialogs as dd
+
+    db = _db()
+    services = _services(db)
+    year, _month = _mes_actual()
+    for monto, categoria in ((5000.0, "Renta"), (7000.0, "Renta"),
+                             (3000.0, "Transporte")):
+        services["expenses"].add_expense(
+            monto, categoria, "Prueba", "efectivo", f"{year:04d}-02-10")
+
+    llamadas: list[int] = []
+
+    class _Falso:
+        def __init__(self, services_, item_id, parent=None):
+            llamadas.append(int(item_id))
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(dd, "ExpenseDetailDialog", _Falso)
+    dialog = dd.GastosCategoriaDialog(services, year, "Renta")
+    try:
+        assert dialog._tabla.rowCount() == 2, "solo los de la categoría"
+        assert dialog.total == 12000.0
+        dialog._tabla.setCurrentCell(0, 0)
+        dialog._abrir_detalle()
+    finally:
+        dialog.close()
+    ids = {int(g.id) for g in dialog._gastos}
+    assert llamadas and llamadas[0] in ids
+
+
+def test_doble_clic_mes_anual_abre_detalle(monkeypatch):
+    from modules.reports import reports_widget as rw
+
+    db = _db()
+    services = _services(db)
+    year, month = _mes_actual()
+    _seed_sale(db, total=10000.0, method="efectivo")
+    widget = rw.ReportsWidget(services)
+    llamadas: list[tuple[int, int]] = []
+
+    class _Falso:
+        def __init__(self, services_, year_, month_, parent=None):
+            llamadas.append((int(year_), int(month_)))
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(rw, "DetalleMesDialog", _Falso)
+    try:
+        widget.year_button.setChecked(True)
+        widget.refresh()
+        fila = next(row for row, item in enumerate(widget._data["breakdown"])
+                    if item["month"] == month)
+        widget.monthly_table.setCurrentCell(fila, 0)
+        widget._open_month_detail()
+    finally:
+        widget.close()
+    assert llamadas == [(year, month)]
+
+
+def test_doble_clic_categoria_anual_abre_listado(monkeypatch):
+    from modules.reports import reports_widget as rw
+
+    db = _db()
+    services = _services(db)
+    year, month = _mes_actual()
+    services["expenses"].add_expense(4000.0, "Renta", "X", "efectivo",
+                                     f"{year:04d}-{month:02d}-05")
+    widget = rw.ReportsWidget(services)
+    llamadas: list[tuple[int, str]] = []
+
+    class _Falso:
+        def __init__(self, services_, year_, category, parent=None):
+            llamadas.append((int(year_), str(category)))
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(rw, "GastosCategoriaDialog", _Falso)
+    try:
+        widget.year_button.setChecked(True)
+        widget.refresh()
+        fila = next(row for row, item in enumerate(widget._data["categories"])
+                    if item["category"] == "Renta")
+        widget.category_table.setCurrentCell(fila, 0)
+        widget._open_category_detail()
+    finally:
+        widget.close()
+    assert llamadas == [(year, "Renta")]
