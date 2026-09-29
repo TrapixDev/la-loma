@@ -40,6 +40,7 @@ from database.models import (
 )
 from modules.credit.credit_service import CreditService
 from network.session import session
+from utils.archivos import ruta_imagen_permitida
 from utils.helpers import (
     ajustar_anchos_encabezado,
     format_currency,
@@ -348,11 +349,16 @@ class PaymentGalleryDialog(QDialog):
             return
         fecha = img.created_at[:16] if img.created_at else "—"
         self.upload_label.setText(f"Subido: {fecha}")
-        pixmap = QPixmap(img.image_path)
+        ruta = ruta_imagen_permitida(img.image_path)
+        if ruta is None:
+            self.image_label.setPixmap(QPixmap())
+            self.image_label.setText("Comprobante no disponible")
+            return
+        pixmap = QPixmap(str(ruta))
         if pixmap.isNull():
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText(
-                f"Archivo no encontrado:\n{Path(img.image_path).name}")
+                f"Archivo no encontrado:\n{Path(str(img.image_path)).name}")
             return
         size = self.image_label.size()
         scaled = pixmap.scaled(
@@ -372,10 +378,11 @@ class PaymentGalleryDialog(QDialog):
                 "QPushButton#thumbnail { border: 2px solid #2e3440; border-radius: 6px;"
                 " padding: 2px; background: #1a1f28; }"
                 "QPushButton#thumbnail:checked { border-color: #2fbf71; }")
-            desc = img.description or Path(img.image_path).name
+            desc = img.description or Path(str(img.image_path)).name
             fecha = img.created_at[:16] if img.created_at else ""
             btn.setToolTip(f"{desc}\nSubido: {fecha}" if fecha else desc)
-            pixmap = QPixmap(img.image_path)
+            ruta = ruta_imagen_permitida(img.image_path)
+            pixmap = QPixmap(str(ruta)) if ruta is not None else QPixmap()
             if not pixmap.isNull():
                 btn.setIcon(QIcon(pixmap.scaled(
                     56, 56,
@@ -400,8 +407,15 @@ class PaymentGalleryDialog(QDialog):
         img = self._current()
         if img is None:
             return
+        ruta = ruta_imagen_permitida(img.image_path)
+        if ruta is None:
+            QMessageBox.warning(
+                self, "Comprobante",
+                "El archivo del comprobante no está disponible o no es una "
+                "imagen válida.")
+            return
         try:
-            os.startfile(img.image_path)
+            os.startfile(str(ruta))
         except Exception as exc:
             QMessageBox.warning(
                 self, "Comprobante", f"No se pudo abrir el archivo:\n{exc}")

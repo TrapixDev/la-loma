@@ -44,7 +44,8 @@ def nota_credito_html(sale, company: dict, nota: dict | None = None,
     clave_html = ""
     ref_clave = nota.get("referencia_clave") or getattr(sale, "hacienda_key", "") or ""
     if ref_clave:
-        clave_html = f'<p class="mono">Clave factura original: {ref_clave}</p>'
+        clave_html = (f'<p class="mono">Clave factura original: '
+                      f'{_html_escape(ref_clave)}</p>')
 
     nota_clave = nota.get("hacienda_key") or ""
     nota_num = nota.get("invoice_number") or ""
@@ -146,7 +147,9 @@ def _documento(html: str) -> QTextDocument:
 
 def guardar_pdf(carpeta: Path, nombre: str, html: str) -> Path | None:
     """Genera el PDF de la nota de crédito dentro de la carpeta mensual."""
-    destino = carpeta / f"{nombre}.pdf"
+    destino = (carpeta / f"{nombre}.pdf").resolve()
+    if not destino.is_relative_to(Path(carpeta).resolve()):
+        return None
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
     printer.setOutputFileName(str(destino))

@@ -31,7 +31,9 @@ from socket import gethostbyname, gethostname
 from config import Config
 from database.db_manager import DatabaseManager
 from database.seed import seed_initial_data
+from network.tls import certificado_efectivo
 from security import auth
+from utils import secretos
 from utils.arranque import asegurar_estructura, migrar_datos_si_vacio
 
 ALLOWED_PREFIXES = ("SELECT", "INSERT INTO", "INSERT OR REPLACE INTO",
@@ -58,14 +60,26 @@ DML_ALLOWED_TABLES = {
     "credit_payment_images", "credit_notes", "promotions", "audit_log",
 }
 DELETE_ALLOWED_TABLES = {
-    "categories", "products", "clients", "expenses", "expense_categories",
-    "product_images", "credit_accounts", "credit_payments",
-    "credit_payment_images", "credit_notes", "promotions",
+    "categories", "products", "clients", "expense_categories",
+    "product_images", "credit_payment_images", "promotions",
 }
 FORBIDDEN_SELECT_TABLES = {"users", "sqlite_master", "sqlite_schema"}
-_TABLE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")
+# Referencia de tabla con comillas, corchetes o esquema delante (main.users).
+_TABLE_REF = (r"((?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)?"
+              r"(?:[A-Za-z_][A-Za-z0-9_]*|\"[^\"]+\"|`[^`]+`|\[[^\]]+\]))")
+_TABLE_REF_RE = re.compile(_TABLE_REF)
+_TABLE_FROM_RE = re.compile(r"\b(?:FROM|JOIN)\s+" + _TABLE_REF, re.IGNORECASE)
+_TABLE_INICIO_RE = re.compile("^" + _TABLE_REF)
 RATE_WINDOW_SECONDS = 600
 RATE_MAX_ATTEMPTS = 20
+# Límites de recursos: evitan que una estación deje sin memoria o CPU al
+# servidor con consultas enormes o imágenes con dimensiones desmedidas.
+MAX_ROWS = 20_000
+MAX_CONCURRENT_REQUESTS = 24
+MAX_IMAGE_SIDE = 4096
+MAX_SETUP_BYTES = 500_000_000
+# Tablas que un cliente nunca puede leer ni escribir desde SQL.
+FORBIDDEN_CLIENT_TABLES = {"users", "sqlite_master", "sqlite_schema"}
 
 
 def parse_content_length(value: str | None) -> int | None:
@@ -98,6 +112,67 @@ def ip_permitida(ip: str) -> bool:
                 or direccion.is_link_local)
 
 
+def _es_loopback(ip: str) -> bool:
+    """True solo para la misma PC (127.0.0.1 / ::1)."""
+    texto = (ip or "").split("%")[0].strip()
+    try:
+        direccion = ipaddress.ip_address(texto)
+    except ValueError:
+        return False
+    if direccion.version == 6 and direccion.ipv4_mapped is not None:
+        direccion = direccion.ipv4_mapped
+    return bool(direccion.is_loopback)
+
+
+def _direcciones_propias() -> set[str]:
+    """IPs de esta PC (para aceptar el setup por su propia IP de LAN)."""
+    direcciones = {"127.0.0.1", "::1"}
+    try:
+        for info in socket.getaddrinfo(gethostname(), None):
+            direcciones.add(str(info[4][0]).split("%")[0])
+    except OSError:
+        pass
+    return direcciones
+
+
+def _es_esta_pc(ip: str) -> bool:
+    """True si la petición viene de la propia PC servidor."""
+    if _es_loopback(ip):
+        return True
+    return (ip or "").split("%")[0].strip() in _direcciones_propias()
+
+
+def _login_block_key(ip: str) -> str:
+    return f"login_block_{str(ip or '').split('%')[0][:45]}"
+
+
+def _leer_bloqueo_persistente(db, ip: str) -> float:
+    """Bloqueo guardado en la base (sobrevive reinicios del servidor)."""
+    try:
+        rows = db.execute_query(
+            "SELECT value FROM app_config WHERE key = ?", (_login_block_key(ip),))
+        return float(rows[0]["value"]) if rows else 0.0
+    except Exception:
+        return 0.0
+
+
+def _guardar_bloqueo_persistente(db, ip: str, until: float) -> None:
+    try:
+        db.execute_update(
+            "INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+            (_login_block_key(ip), f"{float(until):.0f}"))
+    except Exception:
+        pass
+
+
+def _borrar_bloqueo_persistente(db, ip: str) -> None:
+    try:
+        db.execute_update(
+            "DELETE FROM app_config WHERE key = ?", (_login_block_key(ip),))
+    except Exception:
+        pass
+
+
 def valid_params(raw) -> tuple:
     """Normaliza y valida la lista de parámetros de una consulta."""
     if raw is None:
@@ -116,14 +191,51 @@ def valid_params(raw) -> tuple:
     return tuple(raw)
 
 
+def _normalizar_tabla(referencia: str) -> str:
+    """Nombre final de una referencia de tabla: main."users" -> users."""
+    ultimo = str(referencia or "").split(".")[-1].strip()
+    return ultimo.strip('`"[]').lower()
+
+
 def _statement_table(statement: str, keyword: str) -> str:
-    """Extrae el nombre de tabla que sigue a una palabra clave."""
+    """Extrae el nombre de tabla que sigue a una palabra clave.
+
+    Acepta comillas, corchetes y esquema (main.users) para que ninguna forma
+    de escribir el nombre salte la allowlist.
+    """
     rest = statement[len(keyword):].lstrip()
     if keyword.upper().startswith("INSERT"):
         rest = re.sub(r"^OR\s+[A-Za-z]+\s+", "", rest, flags=re.IGNORECASE)
         rest = re.sub(r"^INTO\s+", "", rest, flags=re.IGNORECASE)
-    match = _TABLE_PATTERN.match(rest)
-    return match.group(1).lower() if match else ""
+    match = _TABLE_INICIO_RE.match(rest)
+    return _normalizar_tabla(match.group(1)) if match else ""
+
+
+def aplicar_restricciones(connection: sqlite3.Connection) -> None:
+    """Instala un authorizer de SQLite para las conexiones de los clientes.
+
+    Es la barrera real (no depende de expresiones regulares): bloquea `users`,
+    el esquema interno, PRAGMA/ATTACH y toda escritura fuera de las tablas de
+    negocio, incluida la auditoría (los clientes no pueden falsificarla) y los
+    borrados contables.
+    """
+
+    def _autorizador(accion, arg1, arg2, _dbname, _source):
+        tabla = str(arg1 or "").lower()
+        if accion in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH,
+                      sqlite3.SQLITE_PRAGMA):
+            return sqlite3.SQLITE_DENY
+        if tabla in FORBIDDEN_CLIENT_TABLES:
+            return sqlite3.SQLITE_DENY
+        if accion == sqlite3.SQLITE_DELETE:
+            if tabla not in DELETE_ALLOWED_TABLES:
+                return sqlite3.SQLITE_DENY
+        elif accion in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE):
+            if tabla == "audit_log" or tabla not in DML_ALLOWED_TABLES:
+                return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    connection.set_authorizer(_autorizador)
 
 
 def validate_sql(sql: str) -> str:
@@ -149,9 +261,8 @@ def validate_sql(sql: str) -> str:
         raise ValueError("Solo se permiten SELECT, INSERT, UPDATE o DELETE")
 
     if upper.startswith("SELECT"):
-        tables = {m.lower() for m in re.findall(
-            r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)",
-            statement, re.IGNORECASE)}
+        tables = {_normalizar_tabla(m.group(1))
+                  for m in _TABLE_FROM_RE.finditer(statement)}
         if tables & FORBIDDEN_SELECT_TABLES:
             raise ValueError("Consulta a tabla no permitida")
         return statement
@@ -205,6 +316,57 @@ def _image_magic(data: bytes) -> str | None:
     return None
 
 
+def _image_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Ancho y alto reales de la imagen (sin decodificarla).
+
+    Evita las "bombas de descompresión": una imagen de pocos KB puede declarar
+    dimensiones enormes y agotar la memoria al dibujarla.
+    """
+    try:
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            ancho = int.from_bytes(data[16:20], "big")
+            alto = int.from_bytes(data[20:24], "big")
+            return (ancho, alto) if ancho > 0 and alto > 0 else None
+        if data.startswith(b"\xff\xd8\xff"):
+            indice = 2
+            while indice + 9 < len(data):
+                if data[indice] != 0xFF:
+                    indice += 1
+                    continue
+                marcador = data[indice + 1]
+                if marcador in (0xD8, 0xD9, 0x01) or 0xD0 <= marcador <= 0xD7:
+                    indice += 2
+                    continue
+                largo = int.from_bytes(data[indice + 2:indice + 4], "big")
+                if largo < 2:
+                    return None
+                if 0xC0 <= marcador <= 0xCF and marcador not in (0xC4, 0xC8, 0xCC):
+                    alto = int.from_bytes(data[indice + 5:indice + 7], "big")
+                    ancho = int.from_bytes(data[indice + 7:indice + 9], "big")
+                    return (ancho, alto) if ancho > 0 and alto > 0 else None
+                indice += 2 + largo
+            return None
+        if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            tipo = data[12:16]
+            if tipo == b"VP8X":
+                ancho = 1 + int.from_bytes(data[24:27], "little")
+                alto = 1 + int.from_bytes(data[27:30], "little")
+                return ancho, alto
+            if tipo == b"VP8L":
+                bits = int.from_bytes(data[21:25], "little")
+                ancho = (bits & 0x3FFF) + 1
+                alto = ((bits >> 14) & 0x3FFF) + 1
+                return ancho, alto
+            if tipo == b"VP8 ":
+                ancho = int.from_bytes(data[26:28], "little") & 0x3FFF
+                alto = int.from_bytes(data[28:30], "little") & 0x3FFF
+                return (ancho, alto) if ancho and alto else None
+            return None
+    except (IndexError, ValueError):
+        return None
+    return None
+
+
 def _images_dir(db_path: str) -> Path:
     """Directorio de fotos junto a la base de datos."""
     path = Path(db_path).resolve().parent / "product_images"
@@ -229,11 +391,17 @@ class POSServer(ThreadingHTTPServer):
         self.login_failures: dict[str, dict] = {}
         self.state_lock = threading.Lock()
         self.backup_lock = threading.Lock()
+        # Límite de peticiones simultáneas y caché de hashes de los setups.
+        self.request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
+        self.update_cache: dict[str, tuple] = {}
 
-    def _open_conn(self) -> sqlite3.Connection:
+    def _open_conn(self, restrict: bool = True) -> sqlite3.Connection:
+        """Conexión a la base; con `restrict` aplica el authorizer de clientes."""
         connection = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        if restrict:
+            aplicar_restricciones(connection)
         return connection
 
     def close_transactions(self) -> None:
@@ -333,9 +501,14 @@ class Handler(BaseHTTPRequestHandler):
                    params: tuple) -> dict:
         cursor = connection.execute(statement, params)
         if statement.upper().startswith("SELECT"):
+            filas = cursor.fetchmany(MAX_ROWS + 1)
+            if len(filas) > MAX_ROWS:
+                raise ValueError(
+                    f"La consulta devuelve más de {MAX_ROWS} filas; use "
+                    f"filtros o límites.")
             rows = [
                 dict(zip(row.keys(), (_json_safe(value) for value in row)))
-                for row in cursor.fetchall()
+                for row in filas
             ]
             return {"rows": rows}
         connection.commit()
@@ -347,58 +520,71 @@ class Handler(BaseHTTPRequestHandler):
         if not ip_permitida(self.client_address[0]):
             self._send_json({"error": "Origen no permitido"}, 403)
             return
-        path = self.path.split("?")[0]
-        if path == "/api/health":
-            self._health({})
+        if not self.server.request_slots.acquire(blocking=False):
+            self._send_json({"error": "Servidor ocupado, reintente"}, 503)
             return
-        if path == "/api/update/info":
-            self._update_info()
-            return
-        prefix = "/api/update/download/"
-        if path.startswith(prefix):
-            self._update_download(path[len(prefix):])
-            return
-        prefix = "/api/image/"
-        if path.startswith(prefix):
-            self._image_get(path[len(prefix):])
-            return
-        self._send_json({"error": "Ruta no encontrada"}, 404)
+        try:
+            path = self.path.split("?")[0]
+            if path == "/api/health":
+                self._health({})
+                return
+            if path == "/api/update/info":
+                self._update_info()
+                return
+            prefix = "/api/update/download/"
+            if path.startswith(prefix):
+                self._update_download(path[len(prefix):])
+                return
+            prefix = "/api/image/"
+            if path.startswith(prefix):
+                self._image_get(path[len(prefix):])
+                return
+            self._send_json({"error": "Ruta no encontrada"}, 404)
+        finally:
+            self.server.request_slots.release()
 
     def do_POST(self) -> None:
         if not ip_permitida(self.client_address[0]):
             self._send_json({"error": "Origen no permitido"}, 403)
             return
-        length = parse_content_length(self.headers.get("Content-Length"))
-        if length is None:
-            self._send_json({"error": "Cabecera Content-Length inválida"}, 400)
-            return
-        if length > MAX_BODY_BYTES:
-            self._send_json({"error": "Solicitud demasiado grande"}, 413)
-            return
-        path = self.path.split("?")[0]
-        handlers = {
-            "/api/health": self._health,
-            "/api/setup": self._setup,
-            "/api/login": self._login,
-            "/api/logout": self._logout,
-            "/api/query": self._query,
-            "/api/execute": self._execute,
-            "/api/audit": self._audit_event,
-            "/api/tx/begin": self._tx_begin,
-            "/api/tx/exec": self._tx_exec,
-            "/api/tx/commit": self._tx_commit,
-            "/api/tx/rollback": self._tx_rollback,
-            "/api/image/upload": self._image_upload,
-            "/api/image/delete": self._image_delete,
-        }
-        handler = handlers.get(path)
-        if handler is None:
-            self._send_json({"error": "Ruta no encontrada"}, 404)
+        if not self.server.request_slots.acquire(blocking=False):
+            self._send_json({"error": "Servidor ocupado, reintente"}, 503)
             return
         try:
-            handler(self._read_json())
-        except Exception as exc:
-            self._send_json({"error": f"Error interno: {exc}"}, 500)
+            length = parse_content_length(self.headers.get("Content-Length"))
+            if length is None:
+                self._send_json({"error": "Cabecera Content-Length inválida"}, 400)
+                return
+            if length > MAX_BODY_BYTES:
+                self._send_json({"error": "Solicitud demasiado grande"}, 413)
+                return
+            path = self.path.split("?")[0]
+            handlers = {
+                "/api/health": self._health,
+                "/api/setup": self._setup,
+                "/api/login": self._login,
+                "/api/logout": self._logout,
+                "/api/query": self._query,
+                "/api/execute": self._execute,
+                "/api/audit": self._audit_event,
+                "/api/tx/begin": self._tx_begin,
+                "/api/tx/exec": self._tx_exec,
+                "/api/tx/commit": self._tx_commit,
+                "/api/tx/rollback": self._tx_rollback,
+                "/api/image/upload": self._image_upload,
+                "/api/image/delete": self._image_delete,
+                "/api/secrets/hacienda": self._secrets_hacienda,
+            }
+            handler = handlers.get(path)
+            if handler is None:
+                self._send_json({"error": "Ruta no encontrada"}, 404)
+                return
+            try:
+                handler(self._read_json())
+            except Exception as exc:
+                self._send_json({"error": f"Error interno: {exc}"}, 500)
+        finally:
+            self.server.request_slots.release()
 
     def _health(self, payload: dict) -> None:
         db = DatabaseManager(self.server.db_path)
@@ -409,6 +595,27 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- actualizaciones por red ----------
 
+    def _hashes_setup(self, archivo: Path) -> tuple[str, str] | None:
+        """SHA-256 y MD5 del setup, con caché por fecha de modificación."""
+        try:
+            info = archivo.stat()
+        except OSError:
+            return None
+        clave = archivo.name
+        with self.server.state_lock:
+            cache = self.server.update_cache.get(clave)
+        if cache and cache[0] == info.st_mtime and cache[1] == info.st_size:
+            return cache[2], cache[3]
+        try:
+            data = archivo.read_bytes()
+        except OSError:
+            return None
+        md5 = hashlib.md5(data).hexdigest()
+        sha256 = hashlib.sha256(data).hexdigest()
+        with self.server.state_lock:
+            self.server.update_cache[clave] = (info.st_mtime, info.st_size, md5, sha256)
+        return md5, sha256
+
     def _update_info(self) -> None:
         """Lista los setup disponibles en la carpeta updates del servidor."""
         carpeta = Path(Config.UPDATE_DIR)
@@ -416,16 +623,24 @@ class Handler(BaseHTTPRequestHandler):
         if carpeta.is_dir():
             for archivo in sorted(carpeta.glob("*.exe"), key=lambda p: p.stat().st_mtime,
                                   reverse=True):
-                try:
-                    data = archivo.read_bytes()
-                    setups.append({
-                        "filename": archivo.name,
-                        "size": archivo.stat().st_size,
-                        "md5": hashlib.md5(data).hexdigest(),
-                        "sha256": hashlib.sha256(data).hexdigest(),
-                    })
-                except OSError:
+                hashes = self._hashes_setup(archivo)
+                if hashes is None:
                     continue
+                md5, sha256 = hashes
+                entrada = {
+                    "filename": archivo.name,
+                    "size": archivo.stat().st_size,
+                    "md5": md5,
+                    "sha256": sha256,
+                }
+                firma = archivo.with_name(archivo.name + ".sig")
+                if firma.is_file():
+                    try:
+                        entrada["signature"] = firma.read_text(
+                            encoding="utf-8").strip()
+                    except OSError:
+                        pass
+                setups.append(entrada)
         self._send_json({
             "server_version": Config.APP_VERSION,
             "server_url": (f"{'https' if self.server.tls else 'http'}://"
@@ -445,6 +660,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "Archivo no encontrado"}, 404)
             return
         try:
+            if target.stat().st_size > MAX_SETUP_BYTES:
+                self._send_json({"error": "Archivo demasiado grande"}, 413)
+                return
             data = target.read_bytes()
         except OSError as exc:
             self._send_json({"error": f"No se pudo leer el archivo: {exc}"}, 500)
@@ -458,30 +676,48 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _setup(self, payload: dict) -> None:
-        db = DatabaseManager(self.server.db_path)
+        """Crea el PIN inicial: solo desde la misma PC servidor y una vez.
+
+        Se rechaza cualquier origen de red (una caja o un invitado no pueden
+        quedarse con el PIN del negocio) y la comprobación de "sin usuarios"
+        más la inserción son atómicas.
+        """
+        if not _es_esta_pc(self.client_address[0]):
+            self._send_json(
+                {"error": "El PIN inicial solo se puede crear en la PC del "
+                          "servidor."}, 403)
+            return
+        name = str(payload.get("name") or "Administrador").strip()[:80]
+        pin = str(payload.get("pin") or "")
+        if not auth.valid_pin(pin):
+            self._send_json({"error": "El PIN debe tener entre 4 y 6 dígitos"}, 400)
+            return
+        salt, digest = auth.hash_pin(pin)
+        connection = self.server._open_conn(restrict=False)
         try:
-            if db.count_users() > 0:
+            connection.execute("BEGIN IMMEDIATE")
+            total = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            if int(total or 0) > 0:
+                connection.rollback()
                 self._send_json({"error": "El PIN inicial ya fue creado"}, 400)
                 return
-            name = str(payload.get("name") or "Administrador").strip()[:80]
-            pin = str(payload.get("pin") or "")
-            if not auth.valid_pin(pin):
-                self._send_json({"error": "El PIN debe tener entre 4 y 6 dígitos"}, 400)
-                return
-            salt, digest = auth.hash_pin(pin)
-            db.execute_insert(
+            cursor = connection.execute(
                 "INSERT INTO users (name, pin_salt, pin_hash) VALUES (?, ?, ?)",
-                (name, salt, digest),
-            )
-            user = db.execute_query("SELECT * FROM users ORDER BY id DESC LIMIT 1")[0]
-            token = self._create_session(user)
+                (name, salt, digest))
+            user = {"id": cursor.lastrowid, "name": name}
+            connection.commit()
+        finally:
+            connection.close()
+        token = self._create_session(user)
+        db = DatabaseManager(self.server.db_path)
+        try:
             db.audit(user["id"], user["name"], self.server.station, "SETUP",
                      "PIN inicial creado")
-            self._send_json({
-                "token": token, "user_id": user["id"], "user_name": user["name"],
-            })
         finally:
             db.close()
+        self._send_json({
+            "token": token, "user_id": user["id"], "user_name": user["name"],
+        })
 
     def _create_session(self, user: sqlite3.Row) -> str:
         token = auth.new_token()
@@ -515,6 +751,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         db = DatabaseManager(self.server.db_path)
         try:
+            # El bloqueo persistente sobrevive reinicios del servidor.
+            bloqueo = _leer_bloqueo_persistente(db, ip)
+            if bloqueo and now < bloqueo:
+                with self.server.state_lock:
+                    self.server.login_failures[ip] = {
+                        "count": 0, "blocked_until": bloqueo}
+                wait = int((bloqueo - now) // 60) + 1
+                self._send_json(
+                    {"error": f"Bloqueado por intentos fallidos. Espere {wait} min."}, 423)
+                return
+            if bloqueo:
+                _borrar_bloqueo_persistente(db, ip)
             users = db.execute_query("SELECT * FROM users WHERE active = 1")
             user = None
             for candidate in users:
@@ -524,6 +772,11 @@ class Handler(BaseHTTPRequestHandler):
             if user is None:
                 self._register_rate_attempt()
                 self._register_login_failure(ip, now)
+                with self.server.state_lock:
+                    record = self.server.login_failures.get(ip) or {}
+                    until = float(record.get("blocked_until") or 0)
+                if until > now:
+                    _guardar_bloqueo_persistente(db, ip, until)
                 db.audit(None, "desconocido", self.server.station,
                          "LOGIN_FAIL", "PIN incorrecto")
                 self._send_json({"error": "PIN incorrecto"}, 401)
@@ -537,6 +790,7 @@ class Handler(BaseHTTPRequestHandler):
             with self.server.state_lock:
                 self.server.login_failures.pop(ip, None)
                 self.server.login_attempts.pop(ip, None)
+            _borrar_bloqueo_persistente(db, ip)
             db.execute_update(
                 "UPDATE users SET failed_attempts = 0, locked_until = NULL, "
                 "last_login_at = datetime('now', 'localtime') WHERE id = ?",
@@ -579,6 +833,35 @@ class Handler(BaseHTTPRequestHandler):
         self._audit(session, event, detail)
         self._send_json({"ok": True})
 
+    def _secrets_hacienda(self, payload: dict) -> None:
+        """Guarda credenciales del proveedor FE cifradas con la DPAPI del
+        servidor: las cajas no cifran con su propio usuario de Windows."""
+        session = self._require_auth()
+        if session is None:
+            return
+        campos = {key: str(payload.get(key) or "")
+                  for key in secretos.SECRET_KEYS}
+        campos = {key: valor for key, valor in campos.items() if valor}
+        if not campos:
+            self._send_json({"ok": True, "guardado": False})
+            return
+        connection = self.server._open_conn(restrict=False)
+        try:
+            connection.execute("INSERT OR IGNORE INTO hacienda_config (id) VALUES (1)")
+            for key, valor in campos.items():
+                connection.execute(
+                    f"UPDATE hacienda_config SET {key} = ? WHERE id = 1",
+                    (secretos.cifrar(valor),))
+            connection.commit()
+        except Exception as exc:
+            self._send_json(
+                {"error": f"No se pudieron guardar las credenciales: {exc}"}, 500)
+            return
+        finally:
+            connection.close()
+        self._audit(session, "SECRETS", "credenciales del proveedor FE actualizadas")
+        self._send_json({"ok": True, "guardado": True})
+
     def _query(self, payload: dict) -> None:
         session = self._require_auth()
         if session is None:
@@ -594,7 +877,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         connection = self.server._open_conn()
         try:
-            result = self._run_query(connection, statement, params)
+            try:
+                result = self._run_query(connection, statement, params)
+            except (sqlite3.Error, ValueError) as exc:
+                self._send_json({"error": f"Operación no permitida: {exc}"}, 400)
+                return
         finally:
             connection.close()
         self._send_json(result)
@@ -614,7 +901,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         connection = self.server._open_conn()
         try:
-            result = self._run_query(connection, statement, params)
+            try:
+                result = self._run_query(connection, statement, params)
+            except (sqlite3.Error, ValueError) as exc:
+                self._send_json({"error": f"Operación no permitida: {exc}"}, 400)
+                return
         finally:
             connection.close()
         self._audit(session, "EXECUTE", statement)
@@ -676,15 +967,20 @@ class Handler(BaseHTTPRequestHandler):
             # en /api/tx/commit para que el bloque sea atómico.
             cursor = tx["connection"].execute(statement, params)
             if statement.upper().startswith("SELECT"):
+                filas = cursor.fetchmany(MAX_ROWS + 1)
+                if len(filas) > MAX_ROWS:
+                    raise ValueError(
+                        f"La consulta devuelve más de {MAX_ROWS} filas; use "
+                        f"filtros o límites.")
                 rows = [
                     dict(zip(row.keys(), (_json_safe(value) for value in row)))
-                    for row in cursor.fetchall()
+                    for row in filas
                 ]
                 result = {"rows": rows}
             else:
                 result = {"lastrowid": cursor.lastrowid, "rowcount": cursor.rowcount}
-        except sqlite3.Error as exc:
-            self._send_json({"error": f"Error de base de datos: {exc}"}, 400)
+        except (sqlite3.Error, ValueError) as exc:
+            self._send_json({"error": f"Operación no permitida: {exc}"}, 400)
             return
         tx["last_used"] = time.time()
         tx["statements"].append(statement)
@@ -749,6 +1045,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if _image_magic(data) != Path(name).suffix.lower():
             self._send_json({"error": "Formato de imagen no reconocido"}, 400)
+            return
+        dimensiones = _image_dimensions(data)
+        if dimensiones is None:
+            self._send_json({"error": "No se pudieron validar las dimensiones "
+                                      "de la imagen"}, 400)
+            return
+        if (dimensiones[0] > MAX_IMAGE_SIDE
+                or dimensiones[1] > MAX_IMAGE_SIDE):
+            self._send_json(
+                {"error": f"La imagen supera {MAX_IMAGE_SIDE}px de lado"}, 400)
             return
         images_dir = _images_dir(self.server.db_path)
         target = (images_dir / name).resolve()
@@ -865,22 +1171,38 @@ def _lan_ip() -> str:
 
 
 def _activar_tls(server: POSServer) -> bool:
-    """Envuelve el socket del servidor en TLS si hay certificado configurado."""
-    if not Config.TLS_CERT:
+    """Envuelve el socket del servidor en TLS si hay certificado configurado.
+
+    Si hay certificado configurado y no se puede activar, el arranque falla:
+    continuar en HTTP sin avisar dejaría el PIN y la sesión sin cifrar.
+    """
+    certificado, clave, heredado = certificado_efectivo()
+    if certificado is None:
         return False
-    certificado = Path(Config.TLS_CERT)
-    if not certificado.is_file():
-        return False
+    if heredado:
+        aviso = ("Se está usando el server.pem antiguo (certificado y clave "
+                 "privada juntos). Genere archivos separados con "
+                 "tools/generar_certificado.py y no copie la clave a las cajas.")
+        print(f"Advertencia: {aviso}")
+        try:
+            from utils.diagnostico import escribir_log
+
+            escribir_log(aviso)
+        except Exception:
+            pass
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(str(certificado), Config.TLS_KEY or None)
+        context.load_cert_chain(str(certificado), str(clave) if clave else None)
         server.socket = context.wrap_socket(server.socket, server_side=True)
         server.tls = True
         print(f"TLS activo con el certificado {certificado}")
         return True
     except (OSError, ssl.SSLError) as exc:
-        print(f"Advertencia: no se pudo activar TLS ({exc}). Se usará HTTP.")
-        return False
+        raise RuntimeError(
+            f"TLS está configurado ({certificado}) pero no se pudo activar "
+            f"({exc}). Corrija el certificado/clave o quite tls_cert en "
+            f"config.ini para trabajar sin cifrar dentro de la red."
+        ) from exc
 
 
 def start_server(db_path: str = "", host: str = "", port: int | None = None,
@@ -907,6 +1229,12 @@ def start_server(db_path: str = "", host: str = "", port: int | None = None,
     db = DatabaseManager(db_path)
     db.initialize()
     seed_initial_data(db)
+    try:
+        # Los secretos del proveedor FE se cifran aquí (cuenta del servidor):
+        # si los cifrara una caja, ninguna otra podría descifrarlos.
+        secretos.migrar_secretos_en_db(db)
+    except Exception:
+        pass
     try:
         backup_database(db_path, Config.BACKUP_DIR, Config.KEEP_BACKUPS)
     except Exception as exc:
@@ -952,6 +1280,9 @@ def main() -> int:
             pass
     try:
         server = start_server()
+    except RuntimeError as exc:
+        print(f"No se pudo iniciar el servidor: {exc}")
+        return 1
     except OSError as exc:
         if getattr(exc, "winerror", None) == 10048:
             print(f"El puerto {Config.SERVER_PORT} ya está en uso.")

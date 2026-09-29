@@ -1,23 +1,30 @@
 """Actualización del POS por red local (LAN/WLAN).
 
 La estación consulta al servidor (SERVER_URL) qué setup hay disponible en la
-carpeta de updates, lo descarga, verifica su hash (SHA-256; MD5 solo como
-respaldo de servidores viejos) y lo ejecuta en modo silencioso (Inno Setup).
-El servidor central se actualiza a sí mismo dejando el setup en
+carpeta de updates, lo descarga, verifica su SHA-256 y —si hay una clave
+pública configurada— la firma Ed25519 del archivo. Sin firma, la descarga solo
+se acepta por HTTPS validado; nunca por HTTP ni con un hash ausente.
+
+El servidor central se actualiza a sí mismo dejando el setup (y su `.sig`) en
 %APPDATA%\\PosLaLoma\\updates.
 """
 
+import base64
 import hashlib
 import json
 import re
+import ssl
 import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from config import Config, appdata_dir
+from config import Config
+from network.tls import contexto_cliente
 
 _UPDATE_TIMEOUT = 30
+_MAX_SETUP_BYTES = 500_000_000
+_NOMBRE_VALIDO = re.compile(r"^[A-Za-z0-9_.\-]{1,120}\.exe$")
 
 
 class UpdateError(Exception):
@@ -37,9 +44,17 @@ def _get(url: str, timeout: int = _UPDATE_TIMEOUT) -> bytes:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(
+                request, timeout=timeout,
+                context=contexto_cliente(Config.SERVER_URL)) as response:
             return response.read()
-    except (urllib.error.URLError, OSError) as exc:
+    except ssl.SSLError as exc:
+        raise UpdateError(f"TLS: {exc}") from exc
+    except urllib.error.URLError as exc:
+        raise UpdateError(
+            f"No se pudo conectar con el servidor en {Config.SERVER_URL}: "
+            f"{exc.reason}") from exc
+    except OSError as exc:
         raise UpdateError(
             f"No se pudo conectar con el servidor en {Config.SERVER_URL}.") from exc
 
@@ -84,34 +99,81 @@ def hay_actualizacion(info: dict) -> tuple[bool, str, dict | None]:
     return True, nueva, setup
 
 
-def descargar_setup(setup: dict, destino: Path) -> Path:
-    """Descarga el setup del servidor, verifica su hash y devuelve la ruta.
+def _verificar_firma(data: bytes, setup: dict) -> None:
+    """Exige firma Ed25519 cuando hay clave pública configurada.
 
-    Se prefiere SHA-256 (el servidor lo publica); si no está, se acepta MD5
-    por compatibilidad con servidores viejos.
+    Sin clave pública, la descarga solo se acepta por HTTPS (servidor
+    autenticado por certificado): nunca por HTTP ni sin hash.
     """
-    destino.mkdir(parents=True, exist_ok=True)
-    ruta = destino / str(setup["filename"])
-    url = f"{Config.SERVER_URL}/api/update/download/{setup['filename']}"
-    data = _get(url, timeout=300)
+    clave = (Config.UPDATE_PUBLIC_KEY or "").strip()
+    firma = str(setup.get("signature") or "").strip()
+    if not clave:
+        if not str(Config.SERVER_URL).lower().startswith("https"):
+            raise UpdateError(
+                "La actualización no está firmada y el servidor no usa HTTPS. "
+                "Configure update_public_key (tools/generar_claves_update.py) "
+                "o use HTTPS con el certificado del servidor.")
+        return
+    if not firma:
+        raise UpdateError(
+            "El setup no tiene firma digital; no se instalará. Firme el "
+            "archivo con tools/firmar_setup.py.")
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PublicKey,
+        )
+    except ImportError as exc:
+        raise UpdateError(
+            "Falta el paquete 'cryptography' para verificar la firma del "
+            "setup.") from exc
+    try:
+        clave_bytes = base64.b64decode(clave, validate=True)
+        firma_bytes = base64.b64decode(firma, validate=True)
+        Ed25519PublicKey.from_public_bytes(clave_bytes).verify(
+            firma_bytes, data)
+    except (ValueError, InvalidSignature) as exc:
+        raise UpdateError(
+            "La firma del setup no es válida; el archivo se rechazó.") from exc
+
+
+def descargar_setup(setup: dict, destino: Path) -> Path:
+    """Descarga el setup, verifica tamaño, nombre, hash y firma.
+
+    El archivo SIEMPRE queda dentro de `destino` (nombres con rutas se
+    rechazan) y el SHA-256 es obligatorio.
+    """
+    filename = str(setup.get("filename") or "")
+    if not _NOMBRE_VALIDO.fullmatch(filename):
+        raise UpdateError("El nombre del setup no es válido.")
     sha256_esperado = str(setup.get("sha256") or "").lower()
-    if sha256_esperado:
-        if hashlib.sha256(data).hexdigest() != sha256_esperado:
-            raise UpdateError(
-                "El archivo descargado no coincide con el SHA-256 esperado.")
-    else:
-        md5_esperado = str(setup.get("md5") or "").lower()
-        if md5_esperado and hashlib.md5(data).hexdigest() != md5_esperado:
-            raise UpdateError(
-                "El archivo descargado no coincide con el MD5 esperado.")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256_esperado):
+        raise UpdateError(
+            "El servidor no publicó el SHA-256 del setup; no se descargará.")
+    destino = Path(destino)
+    destino.mkdir(parents=True, exist_ok=True)
+    ruta = (destino / filename).resolve()
+    if not ruta.is_relative_to(destino.resolve()):
+        raise UpdateError("El nombre del setup intenta salir de la carpeta.")
+    url = f"{Config.SERVER_URL}/api/update/download/{filename}"
+    data = _get(url, timeout=300)
+    if len(data) > _MAX_SETUP_BYTES:
+        raise UpdateError("El setup descargado es demasiado grande.")
+    if hashlib.sha256(data).hexdigest() != sha256_esperado:
+        raise UpdateError(
+            "El archivo descargado no coincide con el SHA-256 esperado.")
+    _verificar_firma(data, setup)
     ruta.write_bytes(data)
     return ruta
 
 
 def instalar_setup(ruta: Path) -> None:
     """Ejecuta el setup en modo silencioso (Inno Setup)."""
-    if not ruta.is_file():
+    ruta = Path(ruta)
+    if not ruta.is_file() or ruta.suffix.lower() != ".exe":
         raise UpdateError("El archivo de actualización no existe.")
+    if ruta.stat().st_size > _MAX_SETUP_BYTES:
+        raise UpdateError("El archivo de actualización es demasiado grande.")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         subprocess.Popen(

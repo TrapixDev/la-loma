@@ -149,10 +149,17 @@ def _desglose_pago(sale, moneda) -> list[str]:
 # ---------- HTML del ticket ----------
 
 def _logo_data_uri(ruta: str) -> str:
-    """Convierte el logo a data URI para incrustarlo en el HTML del ticket."""
+    """Convierte el logo a data URI para incrustarlo en el HTML del ticket.
+
+    Solo acepta imágenes locales, con un tamaño acotado y contenido real de
+    imagen: la ruta viene de configuración y no debe permitir leer ni emitir
+    cualquier archivo del equipo (ni rutas de red).
+    """
     try:
-        path = Path(ruta)
-        if not path.is_file():
+        from utils.archivos import ruta_logo_segura
+
+        path = ruta_logo_segura(ruta)
+        if path is None:
             return ""
         datos = base64.b64encode(path.read_bytes()).decode("ascii")
         sufijo = path.suffix.lower().lstrip(".")

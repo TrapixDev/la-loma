@@ -9,6 +9,7 @@ import os
 import shutil
 import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -212,28 +213,59 @@ def _ruta_script_firewall() -> Path:
     return Path(__file__).resolve().parents[1] / "build" / "firewall_pos.ps1"
 
 
-def _seguridad_check() -> dict:
-    """Cifrado del tráfico (HTTPS) según el rol de la PC."""
+def _acl_check() -> str:
+    """Estado real de los permisos de las carpetas de datos."""
     from utils import seguridad
 
-    acl = ("ACLs restringidas al usuario actual" if seguridad.disponible()
-           else "ACLs no aplicables (fuera de Windows)")
+    if not seguridad.disponible():
+        return "ACLs no aplicables (fuera de Windows)"
+    from config import Config
+
+    carpeta = Path(Config.DB_PATH).parent
+    if seguridad.verificar_endurecida(carpeta):
+        return "Permisos restringidos al usuario actual (verificado)"
+    return ("AVISO: no se pudieron verificar permisos restringidos en "
+            f"{carpeta}; ejecute el POS con el usuario del negocio o revise "
+            "las ACLs de la carpeta.")
+
+
+def _tls_servidor_ok() -> tuple[bool, str]:
+    """True si el certificado configurado carga de verdad."""
+    from network.tls import certificado_efectivo
+
+    certificado, clave, heredado = certificado_efectivo()
+    if certificado is None:
+        return False, ""
+    try:
+        contexto = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        contexto.load_cert_chain(str(certificado),
+                                 str(clave) if clave else None)
+    except (OSError, ssl.SSLError) as exc:
+        return False, f"El certificado {certificado.name} no se pudo cargar: {exc}"
+    if heredado:
+        return True, ("HTTPS activo con server.pem antiguo; regenere el "
+                      "certificado en archivos separados")
+    return True, f"HTTPS activo ({certificado.name})"
+
+
+def _seguridad_check() -> dict:
+    """Cifrado del tráfico (HTTPS/TLS) y permisos, según el rol de la PC."""
+    acl = _acl_check()
+    aviso_acl = acl.startswith("AVISO")
     if _es_pc_servidor():
-        certificado = Path(Config.TLS_CERT) if Config.TLS_CERT else None
-        if certificado and certificado.is_file():
-            return _check(NIVEL_OK, "Seguridad",
-                          f"HTTPS activo ({certificado.name}); {acl}")
+        ok_tls, detalle = _tls_servidor_ok()
+        if ok_tls:
+            return _check(NIVEL_AVISO if aviso_acl else NIVEL_OK, "Seguridad",
+                          f"{detalle}; {acl}")
         return _check(NIVEL_AVISO, "Seguridad",
                       "El servidor comparte datos sin cifrar (HTTP) dentro de "
-                      "la red local. Es normal en la red del negocio; no "
-                      "exponga el puerto a Internet.")
+                      "la red local; no exponga el puerto a Internet. " + acl)
     if str(Config.SERVER_URL).lower().startswith("https://"):
         return _check(NIVEL_OK, "Seguridad",
-                      "Conexión cifrada (HTTPS) con el servidor")
+                      f"Conexión cifrada (HTTPS) con el servidor; {acl}")
     return _check(NIVEL_AVISO, "Seguridad",
                   "La conexión con el servidor va sin cifrar (HTTP) dentro de "
-                  "la red local. Es normal en la red del negocio; no exponga "
-                  "el puerto a Internet.")
+                  "la red local; no exponga el puerto a Internet. " + acl)
 
 
 def _firewall_check() -> dict | None:

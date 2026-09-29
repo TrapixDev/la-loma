@@ -160,15 +160,25 @@ class Config:
     # expuesto a Internet.
     LAN_ONLY = _opt("lan_only") != "0"
 
-    # --- TLS opcional (HTTPS) -------------------------------------------------
-    # Para cifrar el tráfico en la red local: genere un certificado con
-    # tools/generar_certificado.py (o ponga tls_cert/tls_key en config.ini).
-    # Las estaciones deben confiar en el certificado con tls_ca (o usar
-    # tls_insecure = 1 solo dentro de la red del negocio).
-    TLS_CERT = _opt("tls_cert") or str(appdata_dir() / "certs" / "server.pem")
-    TLS_KEY = _opt("tls_key")
+    # --- TLS (HTTPS) ----------------------------------------------------------
+    # El servidor usa un certificado y su clave privada en archivos SEPARADOS
+    # (tools/generar_certificado.py). A las cajas solo se les copia el
+    # certificado (server-cert.pem) en tls_ca; la clave privada nunca sale del
+    # servidor. Se mantiene compatibilidad con el server.pem antiguo (clave +
+    # certificado en un solo archivo) con una advertencia.
+    TLS_CERT = _opt("tls_cert") or str(appdata_dir() / "certs" / "server-cert.pem")
+    TLS_KEY = _opt("tls_key") or str(appdata_dir() / "certs" / "server-key.pem")
     TLS_CA = _opt("tls_ca")
     TLS_INSECURE = _opt("tls_insecure") == "1"
+
+    # Conexiones a otras PCs: por defecto se exige HTTPS (el PIN y el token
+    # viajan en cada petición). permitir_http = 1 habilita HTTP dentro de la
+    # red local solo como compatibilidad temporal y queda registrado en el log.
+    PERMITIR_HTTP_INSEGURO = _opt("permitir_http") == "1"
+
+    # Clave pública Ed25519 (base64, 32 bytes) para verificar la firma de los
+    # setups de actualización. Se genera con tools/generar_claves_update.py.
+    UPDATE_PUBLIC_KEY = _opt("update_public_key").strip()
 
     STATION = _opt("station") or "CAJA1"
 

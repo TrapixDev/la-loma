@@ -47,10 +47,15 @@ compartida en red (p. ej. `\\SERVIDOR\documentos`). Si no responde, se usa
 
 ```ini
 [pos]
-server_url = http://192.168.1.10:8000   ; solo estaciones (no el servidor)
+; Solo estaciones (no el servidor). HTTPS obligatorio: copie server-cert.pem
+; del servidor (nunca la clave privada).
+server_url = https://192.168.1.10:8000
+tls_ca = C:\PosLaLoma\certs\server-cert.pem
 station = CAJA2
 docs_path = \\192.168.1.10\documentos
 mode = server                            ; server | local (pruebas)
+; permitir_http = 1                     ; SOLO temporal, red de confianza (inseguro)
+; update_public_key = <base64>          ; firma de actualizaciones
 ```
 
 ## Ejecutar desde el código (desarrollo)
@@ -103,12 +108,28 @@ python -m tests.run_all   # todos los tests (necesita PyQt6, QT_QPA_PLATFORM=off
   aceptar conexiones al puerto solo desde la red local (`remoteip=LocalSubnet`).
 - **Solo redes privadas**: el servidor rechaza peticiones desde IP públicas
   (`lan_only = 0` en config.ini lo desactiva, no recomendado).
-- **HTTPS opcional**: genere un certificado con
-  `python tools/generar_certificado.py --host <IP-del-servidor>` y las cajas
-  usan `tls_ca` (o `tls_insecure = 1` dentro de la red).
-- **Límites de entrada**: tamaño máximo de petición, de parámetros y de fotos;
-  el tráfico entre cajas y servidor se audita en `audit_log`.
-- **Actualizaciones verificadas** con SHA-256 antes de instalar.
+- **HTTPS**: genere el certificado con
+  `python tools/generar_certificado.py --host <IP-del-servidor>`; a cada caja
+  se copia **solo** `server-cert.pem` y se usa con `tls_ca`. La clave privada
+  se queda en el servidor. Las cajas rechazan HTTP sin cifrar (escape
+  temporal: `permitir_http = 1`, inseguro).
+- **PIN inicial**: solo se puede crear desde la PC servidor (nunca por red) y
+  el bloqueo por intentos fallidos sobrevive reinicios del servidor.
+- **SQL del servidor**: los clientes no pueden leer `users` ni el esquema, no
+  pueden escribir la auditoría ni borrar registros financieros (authorizer de
+  SQLite además de la validación de texto); hay tope de filas por consulta y
+  de peticiones simultáneas.
+- **Comprobantes y logos**: solo se muestran/abren imágenes reales dentro de
+  las carpetas del POS; el número de factura se sanea antes de formar rutas.
+- **Límites de entrada**: tamaño máximo de petición, de parámetros, de fotos
+  (con dimensiones verificadas) y del setup de actualización.
+- **Actualizaciones**: SHA-256 obligatorio y firma Ed25519
+  (`tools/generar_claves_update.py` + `tools/firmar_setup.py`); sin firma solo
+  se aceptan por HTTPS validado. El nombre y la carpeta destino se validan.
+- **Credenciales FE**: se cifran en el servidor (DPAPI de su cuenta) mediante
+  `/api/secrets/hacienda`; si viajan desde una caja, van por HTTPS.
+- **Respaldo**: la base y los respaldos no están cifrados; si los saca del
+  equipo use un USB con BitLocker.
 
 ## Notas fiscales pendientes
 

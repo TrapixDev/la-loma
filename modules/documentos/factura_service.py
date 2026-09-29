@@ -1,22 +1,35 @@
 """Orquestación de documentos: guardar XML+PDF y reimprimir facturas."""
 
+import re
+
 from . import pdf_factura as _pdf
 from . import pdf_nota_credito as _pdf_nc
 from . import xml_factura as _xml
 from . import xml_nota_credito as _xml_nc
 from .paths import carpeta_factura
 
-
 def _base_nombre(sale) -> str:
-    """Nombre base de los archivos: V-00021-2026-08-02 .xml/.pdf."""
+    """Nombre base de los archivos: V-00021_2026-08-02 (sin rutas).
+
+    El número de factura viene de la base: se limpia a caracteres seguros
+    para que no pueda formar una ruta absoluta, UNC ni `..`.
+    """
     numero = str(getattr(sale, "invoice_number", "") or "")
+    base = re.sub(r"[^A-Za-z0-9_\-]", "", numero)[:40] or "factura"
     fecha = str(getattr(sale, "created_at", "") or "")
     if len(fecha) >= 10:
         fecha = fecha[:10]
-    base = numero or "factura"
     if fecha:
         return f"{base}_{fecha}"
     return base
+
+
+def _destino_seguro(carpeta, nombre: str, extension: str):
+    """Ruta final garantizada dentro de la carpeta mensual de facturas."""
+    archivo = (carpeta / f"{nombre}{extension}").resolve()
+    if not archivo.is_relative_to(carpeta.resolve()):
+        raise ValueError("Nombre de archivo fuera de la carpeta de facturas")
+    return archivo
 
 
 def generar_documentos(sale, company: dict, payload: dict | None = None,
@@ -38,7 +51,7 @@ def generar_documentos(sale, company: dict, payload: dict | None = None,
     xml_path = None
     if payload:
         xml_text = _xml.build_factura_xml(payload, clave, medio_pago)
-        xml_path = carpeta / f"{nombre}.xml"
+        xml_path = _destino_seguro(carpeta, nombre, ".xml")
         xml_path.write_text(xml_text, encoding="utf-8")
 
     return {
@@ -103,7 +116,7 @@ def generar_nota_credito(sale, company: dict, nota: dict,
     xml_path = None
     if payload:
         xml_text = _xml_nc.build_nota_credito_xml(payload, clave)
-        xml_path = carpeta / f"{nombre}.xml"
+        xml_path = _destino_seguro(carpeta, nombre, ".xml")
         xml_path.write_text(xml_text, encoding="utf-8")
 
     if imprimir and pdf_path:

@@ -42,36 +42,55 @@ Dónde está cada cosa
 Configurar el servidor (PC que guarda la base)
 ----------------------------------------------
 1. Instale el programa normalmente.
-2. Comparta la carpeta de documentos en red:
+2. Comparta la carpeta de documentos en red SOLO con las cuentas que usan
+   el POS (contienen facturas de clientes; no comparta con "Todos"):
    - Cree la carpeta C:\documentos (o donde quiera).
    - Clic derecho > Propiedades > Compartir > "Compartir".
-   - Añada "Todos" con permiso de Lectura/Escritura.
-3. En %APPDATA%\PosLaLoma\config.ini cree el archivo con:
+   - Añada la cuenta del servidor y la de cada caja con permiso de
+     Lectura/Escritura (o cree un usuario de Windows "pos" para todas).
+   - En Seguridad (NTFS) quite "Usuarios" y deje solo esas cuentas.
+3. Genere el certificado HTTPS (una sola vez):
+
+   python tools\generar_certificado.py --host 192.168.1.10
+
+   Se crean dos archivos en %APPDATA%\PosLaLoma\certs:
+     server-cert.pem  -> se copia a cada caja (público)
+     server-key.pem   -> se queda SOLO en el servidor (privado)
+4. En %APPDATA%\PosLaLoma\config.ini cree el archivo con:
 
    [pos]
    station = CAJA1
    docs_path = \\NOMBRE-DE-ESTA-PC\documentos
 
    (En el servidor no se pone server_url; usa el servidor local).
-4. En el Router asigne una IP fija a esta PC (p. ej. 192.168.1.10).
-5. Abra el POS. La primera vez Windows preguntará por el Firewall:
-   marque "Redes privadas" y Aceptar. Si no pregunta, añada manualmente:
-   netsh advfirewall firewall add rule name="PosLaLoma 8000"
-   dir=in action=allow protocol=TCP localport=8000
-6. Para actualizar: deje el setup nuevo en %APPDATA%\PosLaLoma\updates
-   y en Configuración > Actualizaciones > "Buscar actualizaciones".
+5. En el Router asigne una IP fija a esta PC (p. ej. 192.168.1.10).
+6. Abra el POS. La primera vez Windows preguntará por el Firewall:
+   marque "Redes privadas" y Aceptar. Si no pregunta, ejecute como
+   administrador el script herramientas\firewall_pos.ps1 (limita el
+   puerto a la red local; evite netsh sin remoteip ni profile).
+7. Primero cree el PIN en esta misma PC servidor: la creación del PIN
+   inicial solo funciona desde la PC del servidor (nunca desde la red).
+8. Para actualizar: deje el setup nuevo (y su .sig si firma) en
+   %APPDATA%\PosLaLoma\updates y en Configuración > Actualizaciones >
+   "Buscar actualizaciones".
 
 Configurar cada caja (las demás PCs)
 ------------------------------------
 1. Instale el programa normalmente.
-2. Cree %APPDATA%\PosLaLoma\config.ini con:
+2. Copie el certificado del servidor (server-cert.pem) a esta PC.
+3. Cree %APPDATA%\PosLaLoma\config.ini con:
 
    [pos]
-   server_url = http://192.168.1.10:8000
+   server_url = https://192.168.1.10:8000
    station = CAJA2
    docs_path = \\192.168.1.10\documentos
+   tls_ca = C:\PosLaLoma\certs\server-cert.pem
 
-3. Abra el POS: pide el PIN (el mismo creado en el servidor).
+   (Si el servidor no usa HTTPS todavía, la caja rechazará el HTTP sin
+   cifrar; para una red de confianza y de forma temporal puede poner
+   permitir_http = 1, pero lo correcto es usar HTTPS.)
+
+4. Abra el POS: pide el PIN (el mismo creado en el servidor).
 4. En Configuración > Impresora y docs: elija la impresora térmica y el
    papel del ticket (Windows / Rollo continuo 80 mm / Etiqueta) y use
    "Vista previa / Probar impresión" para ver el ticket antes de gastar
@@ -108,9 +127,16 @@ disco, puerto, impresoras, base de datos).
 
 Seguridad
 ---------
-- El PIN de acceso nunca se guarda en texto plano (hash PBKDF2 con sal).
-  La clave y el PIN del proveedor de factura electronica se guardan
-  cifrados con la DPAPI de Windows.
+- El PIN de acceso nunca se guarda en texto plano (hash PBKDF2 con sal) y
+  los intentos fallidos bloquean la PC de origen (el bloqueo sobrevive
+  reinicios del servidor).
+- La clave y el PIN del proveedor de factura electronica se guardan
+  cifrados con la DPAPI de Windows del servidor (las cajas nunca los
+  cifran con su propio usuario).
+- Las conexiones con el servidor usan HTTPS y el certificado del servidor
+  (tls_ca). La clave privada nunca se copia a las cajas.
+- Copie los respaldos (%APPDATA%\PosLaLoma\data\backups) a un USB cifrado
+  (BitLocker) si los saca del equipo: la base no está cifrada.
 - Permisos: la carpeta %APPDATA%\PosLaLoma queda con ACLs que solo
   permiten el acceso al usuario de Windows que usa el POS, SYSTEM y los
   Administradores (se aplica solo al abrir el programa).
@@ -134,7 +160,15 @@ Seguridad
 
 Actualizar el programa
 ----------------------
-1. En el servidor: copie el setup nuevo a %APPDATA%\PosLaLoma\updates.
-2. En cada PC: Configuración > Actualizaciones > "Buscar actualizaciones".
-   La caja descarga e instala sola (se cierra y se abre de nuevo).
-3. Los datos (%APPDATA%\PosLaLoma\data) no se tocan al actualizar.
+1. Firme el setup (una sola vez genere la clave con
+   tools\generar_claves_update.py y ponga la clave pública en el
+   config.ini de cada caja como update_public_key):
+
+   python tools\firmar_setup.py dist\PosLaLoma_Setup_X.Y.Z.exe
+
+2. En el servidor: copie el setup nuevo y su archivo .sig a
+   %APPDATA%\PosLaLoma\updates.
+3. En cada PC: Configuración > Actualizaciones > "Buscar actualizaciones".
+   La caja descarga, verifica el SHA-256 y la firma, e instala sola.
+   Sin firma, la actualización solo se acepta por HTTPS validado.
+4. Los datos (%APPDATA%\PosLaLoma\data) no se tocan al actualizar.

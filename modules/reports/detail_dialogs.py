@@ -28,6 +28,13 @@ def _texto(valor, default: str = "—") -> str:
     return texto or default
 
 
+def _esc(valor) -> str:
+    """Escapa texto que viene de la base antes de meterlo en un QLabel."""
+    texto = "" if valor is None else str(valor)
+    return (texto.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
 def _fecha(value) -> str:
     texto = str(value or "").strip()
     if len(texto) >= 16:
@@ -94,15 +101,22 @@ class _DetalleBase(QDialog):
     # ---------- construcción ----------
 
     def _titulo(self, texto: str) -> None:
-        label = QLabel(texto)
+        label = QLabel()
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setText(texto)
         label.setObjectName("sectionTitle")
         label.setWordWrap(True)
         label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         self._layout.addWidget(label)
 
-    def _meta(self, texto: str) -> None:
-        label = QLabel(texto)
+    def _meta(self, texto: str, html: bool = False) -> None:
+        """Línea de datos; por defecto en texto plano (los valores vienen de
+        la base y no deben interpretarse como HTML)."""
+        label = QLabel()
+        label.setTextFormat(Qt.TextFormat.RichText if html
+                            else Qt.TextFormat.PlainText)
+        label.setText(texto)
         label.setStyleSheet("font-size: 13px; color: #8b93a3;")
         label.setWordWrap(True)
         label.setTextInteractionFlags(
@@ -110,7 +124,9 @@ class _DetalleBase(QDialog):
         self._layout.addWidget(label)
 
     def _subtitulo(self, texto: str) -> None:
-        label = QLabel(texto)
+        label = QLabel()
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setText(texto)
         label.setObjectName("subtitleLabel")
         self._layout.addWidget(label)
 
@@ -131,7 +147,9 @@ class _DetalleBase(QDialog):
         nombre = QLabel(f"{etiqueta}:")
         nombre.setStyleSheet("color: #8b93a3;")
         nombre.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        dato = QLabel(str(valor))
+        dato = QLabel()
+        dato.setTextFormat(Qt.TextFormat.PlainText)
+        dato.setText(str(valor))
         dato.setWordWrap(True)
         dato.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -206,7 +224,7 @@ class SaleDetailDialog(_DetalleBase):
             f"Cajero: {_texto(sale.user_name)}  |  "
             f"Comprobante: {comprobante}  |  "
             f"Estado: <span style='color:{color_estado};font-weight:bold'>"
-            f"{estado}</span>")
+            f"{_esc(estado)}</span>", html=True)
 
         self._subtitulo("Artículos")
         items = list(getattr(sale, "items", None) or [])

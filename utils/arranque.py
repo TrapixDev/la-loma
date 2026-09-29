@@ -25,9 +25,23 @@ def asegurar_estructura() -> None:
                     Path(Config.UPDATE_DIR), Path(Config.DB_PATH).parent):
         carpeta.mkdir(parents=True, exist_ok=True)
     try:
-        from utils.seguridad import endurecer_datos
+        from utils.seguridad import endurecer_datos, verificar_endurecida
 
-        endurecer_datos()
+        if endurecer_datos() == 0 and sys.platform == "win32":
+            # No se puede callar: los datos quedarían legibles para otros
+            # usuarios de Windows. Queda en el log y en el diagnóstico.
+            from utils.diagnostico import escribir_log
+
+            escribir_log(
+                "Aviso: no se pudieron aplicar permisos (ACLs) a las carpetas "
+                "de datos; revise el diagnóstico de instalación.")
+        elif not verificar_endurecida(Path(Config.DB_PATH).parent):
+            # La carpeta real de la base puede estar fuera de %APPDATA%.
+            from utils.diagnostico import escribir_log
+
+            escribir_log(
+                "Aviso: la carpeta de la base no quedó restringida; "
+                "revise el diagnóstico de instalación.")
     except Exception:
         pass
 

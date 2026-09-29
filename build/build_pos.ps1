@@ -70,5 +70,16 @@ if (-not $iscc) {
 & $iscc.FullName (Join-Path $Root "build\PosLaLoma.iss") /DVersion=$Version /DOutput=$Root
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup falló." }
 
+# ---------- 4) Firma del setup (si existe la clave privada) ----------
+$Firma = Join-Path $env:APPDATA "PosLaLoma\updates\update-signing.key"
+$Setup = Join-Path $Root "dist\PosLaLoma_Setup_$Version.exe"
+if (Test-Path $Firma) {
+    Write-Host "== Firmando el setup =="
+    python (Join-Path $Root "tools\firmar_setup.py") $Setup --key $Firma
+    if ($LASTEXITCODE -ne 0) { Write-Warning "No se pudo firmar el setup." }
+} else {
+    Write-Host "Sin clave de firma (tools\generar_claves_update.py); el setup queda sin firmar."
+}
+
 Write-Host ""
 Write-Host "Listo: dist\PosLaLoma_Setup_$Version.exe"

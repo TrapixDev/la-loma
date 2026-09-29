@@ -6,6 +6,7 @@ from database.db_manager import DatabaseManager
 from database.models import CreditAccount, CreditPayment, CreditPaymentImage
 
 from network.session import session
+from utils.archivos import ruta_imagen_permitida
 
 
 class CreditService:
@@ -251,12 +252,14 @@ class CreditService:
         removed = self.db.execute_update(
             "DELETE FROM credit_payment_images WHERE id = ?", (image_id,))
         if removed and rows:
-            path = rows[0]["image_path"] or ""
-            try:
-                if path and os.path.exists(path):
+            # Solo se borra un archivo de imagen dentro de las carpetas del POS:
+            # la ruta viene de la base y no debe poder apuntar a otra cosa.
+            path = ruta_imagen_permitida(rows[0].get("image_path", ""))
+            if path is not None:
+                try:
                     os.remove(path)
-            except OSError:
-                pass
+                except OSError:
+                    pass
         return removed
 
     def list_payment_images(self, payment_id: int) -> list[CreditPaymentImage]:

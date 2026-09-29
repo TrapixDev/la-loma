@@ -15,6 +15,7 @@ from contextlib import contextmanager
 
 from config import Config
 from network.session import session
+from network.tls import contexto_cliente
 
 
 class AuthError(Exception):
@@ -76,19 +77,8 @@ class RemoteDatabase:
     # ---------- transporte ----------
 
     def _ssl_context(self):
-        """Contexto TLS para https: CA configurada o modo inseguro explícito."""
-        if not self.base_url.lower().startswith("https"):
-            return None
-        if Config.TLS_INSECURE:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            return context
-        cafile = Config.TLS_CA or None
-        try:
-            return ssl.create_default_context(cafile=cafile)
-        except (OSError, ssl.SSLError):
-            return ssl.create_default_context()
+        """Contexto TLS para https (CA validada o modo inseguro explícito)."""
+        return contexto_cliente(self.base_url)
 
     def _post(self, path: str, payload: dict, login_attempt: bool = False) -> dict:
         body = json.dumps(payload).encode("utf-8")
@@ -116,6 +106,10 @@ class RemoteDatabase:
                     raise ServerError(message or "PIN incorrecto") from exc
                 raise AuthError(message or "Sesión expirada") from exc
             raise ServerError(message or f"Error del servidor ({exc.code})") from exc
+        except ssl.SSLError as exc:
+            raise ServerError(
+                f"TLS: {exc}\n\nRevise tls_ca en config.ini (o el certificado "
+                f"del servidor).") from exc
         except urllib.error.URLError as exc:
             raise ServerError(
                 f"No se pudo conectar con el servidor en {self.base_url}. "
@@ -228,6 +222,20 @@ class RemoteDatabase:
             raise ServerError(result["error"])
         session.set(result["token"], result["user_id"], result["user_name"], self.station)
         return result
+
+    def guardar_secretos(self, password: str = "", pin: str = "") -> bool:
+        """Envía las credenciales FE para que las cifre el servidor (DPAPI).
+
+        Las cajas no deben cifrar secretos con su propio usuario de Windows:
+        solo el servidor podrá descifrarlos.
+        """
+        self._ensure_auth()
+        payload = {clave: valor for clave, valor in
+                   (("password", password), ("pin", pin)) if valor}
+        if not payload:
+            return True
+        result = self._check(self._post("/api/secrets/hacienda", payload))
+        return bool(result.get("ok"))
 
     def logout(self) -> None:
         try:

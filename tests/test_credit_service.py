@@ -287,16 +287,47 @@ def test_payment_on_anulled_account_rejected():
 
 
 def test_remove_payment_image_deletes_file():
+    import shutil
     import tempfile
+
+    import config as config_module
+
     svc, db = _svc()
     client_id, sale_id = _seed_client_and_sale(db)
     account_id = svc.create_account(sale_id, client_id, f"V-{_counter:05d}", 100000.0)
     payment_id = svc.make_payment(account_id, 25000.0)
+    original = config_module.Config.PRODUCT_IMAGES_DIR
     tmpdir = tempfile.mkdtemp(prefix="pos_comp_")
-    path = os.path.join(tmpdir, "comprobante.png")
-    with open(path, "wb") as handle:
-        handle.write(b"PNG")
-    img_id = svc.add_payment_image(payment_id, path, "Prueba")
-    assert svc.remove_payment_image(img_id) is True
-    assert not os.path.exists(path)
-    assert svc.list_payment_images(payment_id) == []
+    config_module.Config.PRODUCT_IMAGES_DIR = tmpdir
+    try:
+        path = os.path.join(tmpdir, "comprobante.png")
+        with open(path, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
+        img_id = svc.add_payment_image(payment_id, path, "Prueba")
+        assert svc.remove_payment_image(img_id) is True
+        assert not os.path.exists(path)
+        assert svc.list_payment_images(payment_id) == []
+    finally:
+        config_module.Config.PRODUCT_IMAGES_DIR = original
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_remove_payment_image_no_borra_fuera_de_carpetas():
+    """La ruta viene de la base: nunca debe borrar archivos ajenos al POS."""
+    import shutil
+    import tempfile
+
+    svc, db = _svc()
+    client_id, sale_id = _seed_client_and_sale(db)
+    account_id = svc.create_account(sale_id, client_id, f"V-{_counter:05d}", 100000.0)
+    payment_id = svc.make_payment(account_id, 25000.0)
+    tmpdir = tempfile.mkdtemp(prefix="pos_ajeno_")
+    try:
+        ajeno = os.path.join(tmpdir, "importante.txt")
+        with open(ajeno, "wb") as handle:
+            handle.write(b"datos")
+        img_id = svc.add_payment_image(payment_id, ajeno, "Ajeno")
+        assert svc.remove_payment_image(img_id) is True
+        assert os.path.exists(ajeno), "no debe borrar archivos fuera del POS"
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)

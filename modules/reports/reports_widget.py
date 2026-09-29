@@ -71,6 +71,13 @@ def _fmt_day(value) -> str:
     return text
 
 
+def _csv_seguro(valor):
+    """Evita fórmulas al abrir el CSV en una hoja de cálculo."""
+    if isinstance(valor, str) and valor[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + valor
+    return valor
+
+
 class ExpenseDialog(QDialog):
     """Formulario discreto para registrar un gasto."""
 
@@ -876,7 +883,8 @@ class ReportsWidget(QWidget):
                     writer.writerow([])
                     writer.writerow(["Categoría de gasto", "N°", "Total"])
                     for row in self._data.get("categories", []):
-                        writer.writerow([row["category"], row["count"], row["total"]])
+                        writer.writerow([_csv_seguro(row["category"]),
+                                         row["count"], row["total"]])
                 else:
                     writer.writerow(["Día", "Ventas", "Ingresos", "Egresos", "Ganancia"])
                     for row in self._data.get("breakdown", []):

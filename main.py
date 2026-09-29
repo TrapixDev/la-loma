@@ -163,10 +163,13 @@ class SafeApplication(QApplication):
 
 def build_services(db) -> dict:
     from utils import secretos
-    try:
-        secretos.migrar_secretos_en_db(db)
-    except Exception:
-        pass
+    if Config.MODE != "server" or _is_local_server():
+        # En una caja los secretos se cifran en el servidor: si los cifrara
+        # este usuario de Windows, ninguna otra PC podría descifrarlos.
+        try:
+            secretos.migrar_secretos_en_db(db)
+        except Exception:
+            pass
     return {
         "db": db,
         "category": CategoryService(db),
@@ -299,6 +302,9 @@ def _run_server_mode() -> int:
           f"en puerto {Config.SERVER_PORT} (log {Path(__file__).name})")
     try:
         server = server_module.start_server()
+    except RuntimeError as exc:
+        print(f"No se pudo iniciar el servidor: {exc}")
+        return 1
     except OSError as exc:
         if getattr(exc, "winerror", None) == 10048:
             print(f"El puerto {Config.SERVER_PORT} ya está en uso. "
@@ -494,6 +500,12 @@ def _main() -> int:
 
     if Config.MODE == "server":
         url = Config.SERVER_URL
+        from network.tls import url_insegura
+
+        aviso = url_insegura(url)
+        if aviso:
+            QMessageBox.critical(None, "Conexión sin cifrar", aviso)
+            return 1
         chosen_port = None
         if _is_local_server_url(url):
             chosen_port = _choose_local_port(url, Config.SERVER_PORT_PINNED)

@@ -76,8 +76,8 @@ def factura_html(sale, company: dict, cliente_nombre: str = "") -> str:
             import json as _json
             det = _json.loads(details_raw)
             cash_lines = "".join(
-                _row(str(d.get("method", "")), _crc(d.get("amount")))
-                for d in det)
+                _row(_html_escape(str(d.get("method", ""))), _crc(d.get("amount")))
+                for d in det if isinstance(d, dict))
             if float(getattr(sale, "change_amount", 0) or 0) > 0:
                 cash_lines += _row("Vuelto", _crc(sale.change_amount))
         except Exception:
@@ -92,7 +92,8 @@ def factura_html(sale, company: dict, cliente_nombre: str = "") -> str:
     if not is_simplified:
         clave = getattr(sale, "hacienda_key", "") or ""
         if clave:
-            clave_html = f'<p class="mono">Clave Hacienda: {clave}</p>'
+            clave_html = (f'<p class="mono">Clave Hacienda: '
+                          f'{_html_escape(clave)}</p>')
 
     nombre_cliente = cliente_nombre or (getattr(sale, "client_name", "") or "Consumidor Final")
 
@@ -206,7 +207,9 @@ def _documento(html: str) -> QTextDocument:
 
 def guardar_pdf(carpeta: Path, nombre: str, html: str) -> Path | None:
     """Genera el PDF de la factura dentro de la carpeta mensual."""
-    destino = carpeta / f"{nombre}.pdf"
+    destino = (carpeta / f"{nombre}.pdf").resolve()
+    if not destino.is_relative_to(Path(carpeta).resolve()):
+        return None
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
     printer.setOutputFileName(str(destino))

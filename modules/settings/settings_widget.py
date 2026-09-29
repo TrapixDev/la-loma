@@ -499,7 +499,7 @@ class SettingsWidget(QWidget):
             self.certificate_input.setText(path)
 
     def _config_values(self) -> dict:
-        return secretos.cifrar_campos({
+        return {
             "company_name": self.company_name_input.text().strip(),
             "company_id": self.company_id_input.text().strip(),
             "phone": self.phone_input.text().strip(),
@@ -513,7 +513,7 @@ class SettingsWidget(QWidget):
             "branch": self.branch_input.text().strip(),
             "terminal": self.terminal_input.text().strip(),
             "consecutive_fe": self.consecutive_input.text().strip(),
-        })
+        }
 
     def _apply_config(self, config: dict) -> None:
         config = secretos.descifrar_campos(config)
@@ -558,6 +558,21 @@ class SettingsWidget(QWidget):
         values = self._config_values()
         db = self.services.get("db")
         if db is not None:
+            # Los secretos nunca se guardan en texto plano: se conserva el
+            # valor cifrado existente en el INSERT y luego se piden los nuevos
+            # a `guardar_secretos` (el servidor los cifra con su DPAPI).
+            existentes = {}
+            try:
+                rows = db.execute_query(
+                    "SELECT password, pin FROM hacienda_config WHERE id = 1")
+                if rows:
+                    existentes = {clave: (rows[0].get(clave) or "")
+                                  for clave in ("password", "pin")}
+            except Exception:
+                pass
+            nuevos = {clave: values.get(clave, "") for clave in ("password", "pin")}
+            values["password"] = existentes.get("password", "")
+            values["pin"] = existentes.get("pin", "")
             columns = [COLUMN_MAP[key] for key in values]
             placeholders = ", ".join("?" for _ in columns)
             sql = (
@@ -566,6 +581,9 @@ class SettingsWidget(QWidget):
             )
             try:
                 db.execute_insert(sql, tuple(values[key] for key in values))
+                if hasattr(db, "guardar_secretos"):
+                    db.guardar_secretos(password=nuevos.get("password", ""),
+                                        pin=nuevos.get("pin", ""))
                 self._save_extras()
                 QMessageBox.information(self, "Configuración", "Configuración guardada correctamente.")
                 return

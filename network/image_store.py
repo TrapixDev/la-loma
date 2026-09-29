@@ -8,6 +8,7 @@ mantiene una caché en disco y en memoria para no re-descargar.
 import base64
 import json
 import random
+import ssl
 import threading
 import time
 import urllib.error
@@ -20,6 +21,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPixmap
 from config import Config
 from network.remote_db import AuthError, ServerError
 from network.session import session
+from network.tls import contexto_cliente
 
 
 class ImageFetchWorker(QObject):
@@ -63,7 +65,9 @@ class ImageStore:
         if session.token:
             request.add_header("Authorization", f"Bearer {session.token}")
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(
+                    request, timeout=15,
+                    context=contexto_cliente(self.base_url)) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             message = ""
@@ -75,6 +79,8 @@ class ImageStore:
             if exc.code == 401:
                 raise AuthError(message or "Sesión expirada") from exc
             raise ServerError(message or f"Error del servidor ({exc.code})") from exc
+        except ssl.SSLError as exc:
+            raise ServerError(f"TLS: {exc}") from exc
         except urllib.error.URLError as exc:
             raise ServerError(
                 f"No se pudo conectar con el servidor en {self.base_url}."
@@ -154,7 +160,9 @@ class ImageStore:
         if session.token:
             request.add_header("Authorization", f"Bearer {session.token}")
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(
+                    request, timeout=15,
+                    context=contexto_cliente(self.base_url)) as response:
                 data = response.read()
         except Exception:
             return None

@@ -82,33 +82,65 @@ def endurecer_carpeta(ruta) -> bool:
 
 
 def carpetas_de_datos() -> list[Path]:
-    """Carpetas locales del POS que conviene endurecer."""
+    """Carpetas locales del POS que conviene endurecer.
+
+    Incluye la carpeta de datos real (también en modo fuente, donde vive
+    junto al código) y no solo %APPDATA%.
+    """
     from config import Config, appdata_dir
 
-    raiz = appdata_dir()
-    carpetas: list[Path] = [raiz]
+    carpetas: list[Path] = [appdata_dir()]
     for candidato in (Config.DB_PATH, Config.BACKUP_DIR,
-                      Config.PRODUCT_IMAGES_DIR, Config.UPDATE_DIR):
+                      Config.PRODUCT_IMAGES_DIR, Config.UPDATE_DIR,
+                      str(appdata_dir() / "certs")):
         path = Path(candidato)
-        try:
-            path.resolve().relative_to(raiz.resolve())
-        except (ValueError, OSError):
+        if es_ruta_de_red(path):
             continue
         carpetas.append(path if path.suffix == "" else path.parent)
-    return carpetas
+    unicas: list[Path] = []
+    for carpeta in carpetas:
+        if carpeta not in unicas:
+            unicas.append(carpeta)
+    return unicas
 
 
 def endurecer_datos() -> int:
-    """Endurece la carpeta raíz de datos (los hijos heredan los permisos).
+    """Endurece cada carpeta local de datos y devuelve cuántas quedaron bien.
 
-    Una sola llamada a icacls alcanza: el permiso se otorga con (OI)(CI), así
-    que data, backups, fotos y updates quedan cubiertos por herencia.
+    Se aplica a la carpeta real de la base (que en modo fuente está junto al
+    código, fuera de %APPDATA%) y a las subcarpetas de respaldos, fotos,
+    actualizaciones y certificados.
     """
-    from config import appdata_dir
+    endurecidas = 0
+    for carpeta in carpetas_de_datos():
+        try:
+            carpeta.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if endurecer_carpeta(carpeta):
+            endurecidas += 1
+    return endurecidas
 
-    raiz = appdata_dir()
+
+def verificar_endurecida(ruta) -> bool:
+    """True si la carpeta ya no hereda permisos amplios y tiene al usuario.
+
+    Se usa en el diagnóstico para no afirmar que hay ACLs sin comprobarlo.
+    """
+    if not disponible():
+        return False
+    path = Path(ruta)
+    if es_ruta_de_red(path) or not path.exists():
+        return False
     try:
-        raiz.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return 0
-    return 1 if endurecer_carpeta(raiz) else 0
+        result = subprocess.run(
+            ["icacls", str(path)], capture_output=True, text=True,
+            timeout=_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    salida = result.stdout or ""
+    usuario = _usuario_actual()
+    return "(I)" not in salida and bool(usuario) and usuario.lower() in salida.lower()

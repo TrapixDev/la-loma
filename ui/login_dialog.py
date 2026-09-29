@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 from network.session import session
 from security import auth
+from utils import secretos
 
 PIN_MIN = auth.PIN_MIN
 PIN_MAX = auth.PIN_MAX
@@ -108,6 +109,20 @@ class LocalAuth:
         )
         session.set("local", user_id, name)
         return {"user_id": user_id, "user_name": name}
+
+    def guardar_secretos(self, password: str = "", pin: str = "") -> bool:
+        """Cifra las credenciales FE con la DPAPI de este equipo (modo local)."""
+        campos = {}
+        if password:
+            campos["password"] = secretos.cifrar(password)
+        if pin:
+            campos["pin"] = secretos.cifrar(pin)
+        if not campos:
+            return True
+        columnas = ", ".join(f"{clave} = ?" for clave in campos)
+        return self.db.execute_update(
+            f"UPDATE hacienda_config SET {columnas} WHERE id = 1",
+            tuple(campos.values()))
 
     def logout(self) -> None:
         session.clear()

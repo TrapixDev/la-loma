@@ -84,18 +84,34 @@ def test_update_info_y_descarga():
         fake.unlink(missing_ok=True)
 
 
-def test_descarga_verifica_sha256():
+def test_descarga_verifica_sha256_y_firma():
+    import base64
+
     import config as config_module
     from network import updater
 
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     fake = TMP_DIR / "PosLaLoma_Setup_9.9.8.exe"
-    contenido = b"FAKE-SETUP-SHA256"
+    contenido = b"FAKE-SETUP-SHA256-FIRMADO"
     fake.write_bytes(contenido)
+    clave = Ed25519PrivateKey.generate()
+    firma = base64.b64encode(clave.sign(contenido)).decode("ascii")
+    (TMP_DIR / "PosLaLoma_Setup_9.9.8.exe.sig").write_text(firma + "\n",
+                                                           encoding="utf-8")
 
     original_dir = config_module.Config.UPDATE_DIR
     original_url = config_module.Config.SERVER_URL
+    original_key = config_module.Config.UPDATE_PUBLIC_KEY
     config_module.Config.UPDATE_DIR = str(TMP_DIR)
+    config_module.Config.UPDATE_PUBLIC_KEY = base64.b64encode(
+        clave.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw)).decode("ascii")
     srv = start_server(port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
@@ -107,6 +123,7 @@ def test_descarga_verifica_sha256():
         setup = updater.setup_mas_nuevo(info)
         assert setup is not None
         assert setup.get("sha256") == hashlib.sha256(contenido).hexdigest()
+        assert setup.get("signature") == firma
         ruta = updater.descargar_setup(setup, destino)
         assert ruta.read_bytes() == contenido
 
@@ -117,16 +134,47 @@ def test_descarga_verifica_sha256():
         except updater.UpdateError:
             pass
 
-        solo_md5 = {k: v for k, v in setup.items() if k != "sha256"}
-        ruta = updater.descargar_setup(solo_md5, destino)
+        sin_hash = {k: v for k, v in setup.items() if k != "sha256"}
+        try:
+            updater.descargar_setup(sin_hash, destino)
+            raise AssertionError("debía rechazar la descarga sin SHA-256")
+        except updater.UpdateError:
+            pass
+
+        sin_firma = {k: v for k, v in setup.items() if k != "signature"}
+        try:
+            updater.descargar_setup(sin_firma, destino)
+            raise AssertionError("debía rechazar la descarga sin firma")
+        except updater.UpdateError:
+            pass
+
+        firma_mala = {**setup, "signature": base64.b64encode(
+            b"x" * 64).decode("ascii")}
+        try:
+            updater.descargar_setup(firma_mala, destino)
+            raise AssertionError("debía rechazar la firma inválida")
+        except updater.UpdateError:
+            pass
+
+        ruta = updater.descargar_setup(setup, destino)
         assert ruta.read_bytes() == contenido
-        print("[OK] descarga verifica SHA-256 (y MD5 como respaldo)")
+
+        # Un nombre con ruta no puede escribir fuera de la carpeta destino.
+        travesura = {**setup, "filename": "..\\PosLaLoma_Setup_9.9.8.exe"}
+        try:
+            updater.descargar_setup(travesura, destino / "sub")
+            raise AssertionError("debía rechazar el nombre con traversal")
+        except updater.UpdateError:
+            pass
+        print("[OK] descarga verifica SHA-256, firma y nombre contenido")
     finally:
         srv.shutdown()
         srv.server_close()
         config_module.Config.UPDATE_DIR = original_dir
         config_module.Config.SERVER_URL = original_url
+        config_module.Config.UPDATE_PUBLIC_KEY = original_key
         fake.unlink(missing_ok=True)
+        (TMP_DIR / "PosLaLoma_Setup_9.9.8.exe.sig").unlink(missing_ok=True)
         import shutil
         shutil.rmtree(destino, ignore_errors=True)
 
@@ -143,7 +191,6 @@ def test_validate_sql_politica_tablas():
         "INSERT INTO promotions (name, type) VALUES ('x', 'payment')",
         "DELETE FROM promotions WHERE id = 1",
         "DELETE FROM product_images WHERE id = 1",
-        "DELETE FROM expenses WHERE id = 1",
     )
     for sql in permitidas:
         assert validate_sql(sql), sql
@@ -151,6 +198,9 @@ def test_validate_sql_politica_tablas():
     bloqueadas = (
         "SELECT * FROM users",
         "SELECT name FROM users WHERE id = 1",
+        'SELECT name FROM "users"',
+        "SELECT name FROM main.users",
+        "SELECT name FROM [users]",
         "SELECT * FROM sqlite_master",
         "INSERT INTO users (name) VALUES ('x')",
         "UPDATE users SET pin_hash = 'x'",
@@ -158,6 +208,10 @@ def test_validate_sql_politica_tablas():
         "DELETE FROM sales",
         "DELETE FROM audit_log",
         "DELETE FROM counters",
+        "DELETE FROM expenses WHERE id = 1",
+        "DELETE FROM credit_payments WHERE id = 1",
+        "DELETE FROM credit_accounts WHERE id = 1",
+        "DELETE FROM credit_notes WHERE id = 1",
         "DROP TABLE sales",
         "SELECT 1; DELETE FROM sales",
     )
@@ -192,13 +246,25 @@ def test_login_y_politica_dml():
         for bad in ("UPDATE users SET name = 'x'",
                     "INSERT INTO users (name) VALUES ('x')",
                     "DELETE FROM sales",
-                    "DELETE FROM audit_log"):
+                    "DELETE FROM audit_log",
+                    "DELETE FROM expenses WHERE id = 1",
+                    "DELETE FROM credit_payments WHERE id = 1",
+                    # El authorizer bloquea la lectura de users aunque el
+                    # SELECT de origen use comillas, corchetes o esquema.
+                    "INSERT INTO app_config (key, value) "
+                    "SELECT 'x', pin_hash FROM users",
+                    "INSERT INTO app_config (key, value) "
+                    'SELECT \'x\', pin_hash FROM "users"',
+                    "UPDATE audit_log SET detail = 'falso'"):
             status, body = post(base + "/api/execute", {"sql": bad}, token)
             assert status == 400, (bad, status, body)
 
-        status, body = post(base + "/api/query",
-                            {"sql": "SELECT * FROM users"}, token)
-        assert status == 400, (status, body)
+        for bad_select in ("SELECT * FROM users",
+                           'SELECT pin_hash FROM "users"',
+                           "SELECT pin_hash FROM main.users",
+                           "SELECT pin_hash FROM [users]"):
+            status, body = post(base + "/api/query", {"sql": bad_select}, token)
+            assert status == 400, (bad_select, status, body)
 
         status, body = post(base + "/api/audit",
                             {"event": "PRUEBA_AUDIT", "detail": "test"}, token)
