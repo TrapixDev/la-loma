@@ -2,8 +2,8 @@
 
 Se abren con doble clic en los movimientos del día, el historial de ventas,
 los meses del reporte anual y las categorías de gasto. Son de solo lectura
-(el gasto también); el detalle de venta permite reimprimir la factura y el
-detalle del mes exporta el resumen a CSV.
+(el gasto se puede editar); el detalle de venta permite reimprimir la factura
+y el detalle del mes exporta el resumen a CSV.
 """
 
 import calendar
@@ -185,6 +185,29 @@ class _DetalleBase(QDialog):
         fila.addWidget(cerrar)
         self._layout.addLayout(fila)
 
+    def _limpiar(self) -> None:
+        """Vacía el contenido para poder reconstruirlo (p. ej. tras editar)."""
+        def _vaciar(layout) -> None:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
+                    continue
+                hijo = item.layout()
+                if hijo is not None:
+                    _vaciar(hijo)
+
+        _vaciar(self._layout)
+        self._grid = QGridLayout()
+        self._grid.setHorizontalSpacing(14)
+        self._grid.setVerticalSpacing(4)
+        self._grid.setColumnStretch(1, 1)
+        self._grid_agregado = False
+        self._fila = 0
+        self.filas = {}
+
 
 class SaleDetailDialog(_DetalleBase):
     """Detalle de una venta: artículos, totales, pagos y estado."""
@@ -304,15 +327,22 @@ class SaleDetailDialog(_DetalleBase):
 
 
 class ExpenseDetailDialog(_DetalleBase):
-    """Detalle de un gasto (solo lectura)."""
+    """Detalle de un gasto, con botón para editar todos sus parámetros."""
 
     def __init__(self, services: dict, expense_id: int, parent=None):
         super().__init__("Detalle del gasto", parent)
-        servicio = (services or {}).get("expenses")
+        self.services = services or {}
+        self.expense_id = int(expense_id or 0)
+        self.expense = None
+        self.editado = False
+        self._construir()
+
+    def _construir(self) -> None:
+        servicio = self.services.get("expenses")
         expense = None
-        if servicio is not None and expense_id:
+        if servicio is not None and self.expense_id:
             try:
-                expense = servicio.get_expense(int(expense_id))
+                expense = servicio.get_expense(self.expense_id)
             except Exception:
                 expense = None
         if expense is None:
@@ -320,6 +350,7 @@ class ExpenseDetailDialog(_DetalleBase):
             self._meta("No se pudo cargar el gasto seleccionado.")
             self._botones()
             return
+        self.expense = expense
         self._titulo(f"Gasto — {format_currency(float(expense.amount or 0))}")
         self._meta(f"Categoría: {_texto(expense.category)}  |  "
                    f"Fecha: {_fecha(expense.expense_date)}")
@@ -333,7 +364,20 @@ class ExpenseDetailDialog(_DetalleBase):
         self._valor("Registrado por", _texto(expense.user_name))
         self._valor("Caja", _texto(expense.station))
         self._valor("Registrado el", _fecha(expense.created_at))
-        self._botones()
+
+        editar = QPushButton("Editar")
+        editar.setObjectName("secondaryButton")
+        editar.clicked.connect(self._editar)
+        self._botones([editar])
+
+    def _editar(self) -> None:
+        from modules.reports.reports_widget import ExpenseDialog
+
+        dialog = ExpenseDialog(self.services, parent=self, expense=self.expense)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.editado = True
+            self._limpiar()
+            self._construir()
 
 
 class CreditPaymentDetailDialog(_DetalleBase):
@@ -557,16 +601,21 @@ class GastosCategoriaDialog(_DetalleBase):
         super().__init__(f"Gastos de {category} {int(year)}", parent)
         self.services = services or {}
         self.categoria = str(category or "")
+        self._year = int(year)
+        self.editado = False
+        self._construir()
+
+    def _construir(self) -> None:
         servicio = self.services.get("expenses")
         try:
             self._gastos = list(servicio.get_expenses_by_category(
-                self.categoria, f"{int(year):04d}-01-01",
-                f"{int(year):04d}-12-31")) if servicio is not None else []
+                self.categoria, f"{self._year:04d}-01-01",
+                f"{self._year:04d}-12-31")) if servicio is not None else []
         except Exception:
             self._gastos = []
         self.total = sum(float(g.amount or 0) for g in self._gastos)
         self._meta(
-            f"Año {int(year)}  |  {len(self._gastos)} gasto(s)  |  "
+            f"Año {self._year}  |  {len(self._gastos)} gasto(s)  |  "
             f"Total {format_currency(self.total)}")
         self._subtitulo("Gastos registrados")
         self._tabla = EmptyStateTable(
@@ -607,5 +656,10 @@ class GastosCategoriaDialog(_DetalleBase):
         if row < 0 or row >= len(self._gastos):
             return
         gasto = self._gastos[row]
-        ExpenseDetailDialog(self.services, int(gasto.id or 0),
-                            parent=self).exec()
+        dialog = ExpenseDetailDialog(self.services, int(gasto.id or 0),
+                                     parent=self)
+        dialog.exec()
+        if getattr(dialog, "editado", False):
+            self.editado = True
+            self._limpiar()
+            self._construir()

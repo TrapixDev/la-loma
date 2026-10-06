@@ -492,3 +492,92 @@ def test_doble_clic_categoria_anual_abre_listado(monkeypatch):
     finally:
         widget.close()
     assert llamadas == [(year, "Renta")]
+
+
+# ---------- edición de gastos ----------
+
+def test_update_expense_cambia_todos_los_parametros():
+    db = _db()
+    services = _services(db)
+    expense_id = services["expenses"].add_expense(
+        1000.0, "Renta", "Original", "efectivo", "2026-09-25")
+
+    assert services["expenses"].update_expense(
+        expense_id, 2500.0, "Transporte", "Corregido", "tarjeta",
+        "2026-09-26") is True
+
+    gasto = services["expenses"].get_expense(expense_id)
+    assert float(gasto.amount) == 2500.0
+    assert gasto.category == "Transporte"
+    assert gasto.description == "Corregido"
+    assert gasto.payment_method == "tarjeta"
+    assert gasto.expense_date == "2026-09-26"
+
+
+def test_dialogo_de_gasto_precarga_y_edita(monkeypatch):
+    from modules.reports.reports_widget import ExpenseDialog
+
+    db = _db()
+    services = _services(db)
+    expense_id = services["expenses"].add_expense(
+        1000.0, "Renta", "Original", "Efectivo", "2026-09-25")
+
+    gasto = services["expenses"].get_expense(expense_id)
+    dialog = ExpenseDialog(services, expense=gasto)
+    try:
+        assert dialog.windowTitle() == "Editar gasto"
+        assert dialog.amount_input.value() == 1000.0
+        assert dialog.category_input.currentText() == "Renta"
+        assert dialog.description_input.text() == "Original"
+        assert dialog.method_input.currentText() == "Efectivo"
+        assert dialog.date_input.date().toString("yyyy-MM-dd") == "2026-09-25"
+
+        dialog.amount_input.setValue(3000.0)
+        dialog.category_input.setEditText("Transporte")
+        dialog.description_input.setText("Cambiado")
+        dialog.method_input.setCurrentText("Tarjeta")
+        dialog._save()
+    finally:
+        dialog.close()
+
+    editado = services["expenses"].get_expense(expense_id)
+    assert float(editado.amount) == 3000.0
+    assert editado.category == "Transporte"
+    assert editado.description == "Cambiado"
+    assert editado.payment_method == "Tarjeta"
+
+
+def test_detalle_gasto_se_recarga_al_editar(monkeypatch):
+    from PyQt6.QtWidgets import QDialog
+
+    from modules.reports import reports_widget as rw
+    from modules.reports.detail_dialogs import ExpenseDetailDialog
+
+    db = _db()
+    services = _services(db)
+    expense_id = services["expenses"].add_expense(
+        1000.0, "Renta", "Original", "Efectivo", "2026-09-25")
+
+    class _Falso:
+        def __init__(self, services_, parent=None, expense=None):
+            self.services = services_
+            self.expense = expense
+
+        def exec(self):
+            self.services["expenses"].update_expense(
+                int(self.expense.id), 2500.0, "Transporte", "Corregido",
+                "Tarjeta", "2026-09-26")
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(rw, "ExpenseDialog", _Falso)
+    dialog = ExpenseDetailDialog(services, expense_id)
+    try:
+        assert dialog.filas["Monto"] == "₡1,000.00"
+        dialog._editar()
+        assert dialog.editado is True
+        assert dialog.filas["Monto"] == "₡2,500.00"
+        assert dialog.filas["Categoría"] == "Transporte"
+        assert dialog.filas["Descripción"] == "Corregido"
+    finally:
+        dialog.close()
+

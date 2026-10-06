@@ -78,14 +78,50 @@ def _fmt_day(value) -> str:
 
 
 class ExpenseDialog(QDialog):
-    """Formulario discreto para registrar un gasto."""
+    """Formulario para registrar o editar un gasto.
 
-    def __init__(self, services: dict, parent: QWidget | None = None):
+    Con ``expense`` se abre en modo edición y se guardan todos los parámetros
+    (monto, categoría, descripción, método de pago y fecha).
+    """
+
+    def __init__(self, services: dict, parent: QWidget | None = None,
+                 expense=None):
         super().__init__(parent)
         self.services = services
-        self.setWindowTitle("Registrar gasto")
+        self.expense = expense
+        self.setWindowTitle("Editar gasto" if expense is not None
+                            else "Registrar gasto")
         self.setMinimumWidth(380)
         self._setup_ui()
+        if expense is not None:
+            self._cargar(expense)
+
+    def _cargar(self, expense) -> None:
+        """Precarga los campos con los datos del gasto a editar."""
+        try:
+            self.amount_input.setValue(float(expense.amount or 0))
+        except (TypeError, ValueError):
+            pass
+        category = str(expense.category or "").strip()
+        if category:
+            index = self.category_input.findText(category)
+            if index >= 0:
+                self.category_input.setCurrentIndex(index)
+            else:
+                self.category_input.setEditText(category)
+        self.description_input.setText(str(expense.description or ""))
+        method = str(expense.payment_method or "").strip()
+        if method:
+            index = self.method_input.findText(
+                method, Qt.MatchFlag.MatchFixedString)
+            if index < 0:
+                index = self.method_input.findText(method.capitalize())
+            if index >= 0:
+                self.method_input.setCurrentIndex(index)
+        fecha = QDate.fromString(str(expense.expense_date or "")[:10],
+                                 "yyyy-MM-dd")
+        if fecha.isValid():
+            self.date_input.setDate(fecha)
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -141,13 +177,23 @@ class ExpenseDialog(QDialog):
         category = self.category_input.currentText().strip() or "Otros"
         date_text = self.date_input.date().toString("yyyy-MM-dd")
         try:
-            self.services["expenses"].add_expense(
-                amount,
-                category,
-                self.description_input.text().strip(),
-                self.method_input.currentText(),
-                date_text,
-            )
+            if self.expense is not None:
+                self.services["expenses"].update_expense(
+                    int(self.expense.id),
+                    amount,
+                    category,
+                    self.description_input.text().strip(),
+                    self.method_input.currentText(),
+                    date_text,
+                )
+            else:
+                self.services["expenses"].add_expense(
+                    amount,
+                    category,
+                    self.description_input.text().strip(),
+                    self.method_input.currentText(),
+                    date_text,
+                )
         except Exception as exc:
             QMessageBox.critical(self, "Error al guardar", f"No se pudo registrar el gasto:\n{exc}")
             return
@@ -337,6 +383,7 @@ class MovimientosDiaDialog(QDialog):
         super().__init__(parent)
         self.services = services or {}
         self.movimientos = list(movimientos or [])
+        self.editado = False
         self._table: QTableWidget | None = None
         self.setWindowTitle(f"Movimientos del día {_fmt_day(day)}")
         self.setMinimumSize(520, 250)
@@ -436,6 +483,8 @@ class MovimientosDiaDialog(QDialog):
         else:
             return
         dialog.exec()
+        if getattr(dialog, "editado", False):
+            self.editado = True
 
 
 class ReportsWidget(QWidget):
@@ -731,6 +780,8 @@ class ReportsWidget(QWidget):
         movimientos = report.list_movements(day, day)
         dialog = MovimientosDiaDialog(day, movimientos, self.services, parent=self)
         dialog.exec()
+        if getattr(dialog, "editado", False):
+            self.refresh()
 
     def _update_action_buttons(self) -> None:
         sale = self._selected_sale()
@@ -815,8 +866,11 @@ class ReportsWidget(QWidget):
         if not category:
             return
         year = int(self.year_combo.currentData())
-        GastosCategoriaDialog(self.services, year, category,
-                              parent=self).exec()
+        dialog = GastosCategoriaDialog(self.services, year, category,
+                                       parent=self)
+        dialog.exec()
+        if getattr(dialog, "editado", False):
+            self.refresh()
 
     def _anular_sale(self) -> None:
         sale = self._selected_sale()

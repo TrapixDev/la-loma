@@ -31,6 +31,23 @@ class ExpenseService:
              session.user_id, session.user_name, session.station),
         )
 
+    def update_expense(self, expense_id: int, amount: float, category: str,
+                       description: str = "",
+                       payment_method: str = "efectivo",
+                       expense_date: str | None = None) -> bool:
+        """Edita un gasto existente. La categoría nueva se crea sola."""
+        amount = round(float(amount), 2)
+        category = str(category).strip() or "Otros"
+        if expense_date is None:
+            expense_date = date.today().isoformat()
+        self._ensure_category(category)
+        return self.db.execute_update(
+            "UPDATE expenses SET expense_date = ?, category = ?, description = ?, "
+            "amount = ?, payment_method = ? WHERE id = ?",
+            (expense_date, category, description, amount, payment_method,
+             int(expense_id)),
+        )
+
     def get_expense(self, expense_id: int) -> Expense | None:
         """Devuelve un gasto por id (para el detalle del movimiento)."""
         rows = self.db.execute_query(
