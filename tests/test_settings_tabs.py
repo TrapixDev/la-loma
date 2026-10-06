@@ -60,7 +60,7 @@ def test_configuracion_por_pestanas():
     assert tabs is not None, "falta el QTabWidget de configuración"
     titulos = [tabs.tabText(i) for i in range(tabs.count())]
     assert titulos == ["Empresa", "Promociones", "Hacienda",
-                       "Impresora y docs", "Sistema"], titulos
+                       "Impresora y docs", "Apariencia", "Sistema"], titulos
 
     for atributo in ("company_name_input", "promotions_table",
                      "environment_combo", "printer_combo",

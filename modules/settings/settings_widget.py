@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSlider,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -28,8 +29,17 @@ from utils.helpers import (
     NoWheelComboBox,
 )
 
+from config import Config
 from modules.promotions.promotion_dialog import PromotionDialog, describe_promotion
 from modules.promotions.promotion_service import TYPE_LABELS
+from ui.theme import (
+    ACCENT_PRESETS,
+    DENSITY_LABELS,
+    DEFAULT_APPEARANCE,
+    apply_theme,
+    load_appearance,
+    save_appearance,
+)
 from utils import secretos
 
 CONFIG_KEYS = [
@@ -122,7 +132,8 @@ class SettingsWidget(QWidget):
         tabs = QTabWidget()
         tabs.setObjectName("settingsTabs")
 
-        def _tab_page() -> tuple[QScrollArea, QVBoxLayout]:
+        def _tab_page(max_width: int | None = 980
+                      ) -> tuple[QScrollArea, QVBoxLayout]:
             page_scroll = QScrollArea()
             page_scroll.setWidgetResizable(True)
             page_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -130,7 +141,8 @@ class SettingsWidget(QWidget):
             page_layout = QVBoxLayout(page)
             page_layout.setContentsMargins(4, 8, 4, 8)
             page_layout.setSpacing(16)
-            page.setMaximumWidth(980)
+            if max_width:
+                page.setMaximumWidth(max_width)
             page_scroll.setWidget(page)
             return page_scroll, page_layout
 
@@ -138,7 +150,8 @@ class SettingsWidget(QWidget):
         promo_page, promo_page_layout = _tab_page()
         hacienda_page, hacienda_page_layout = _tab_page()
         printer_page, printer_page_layout = _tab_page()
-        system_page, system_page_layout = _tab_page()
+        appearance_page, appearance_page_layout = _tab_page(max_width=None)
+        system_page, system_page_layout = _tab_page(max_width=None)
 
         # ---------- Tarjeta 1: Empresa ----------
         company_group = QGroupBox("Empresa")
@@ -408,6 +421,18 @@ class SettingsWidget(QWidget):
         docs_form.addRow("", docs_hint)
         printer_page_layout.addWidget(docs_group)
 
+        # ---------- Sistema en dos columnas ----------
+        system_columns = QHBoxLayout()
+        system_columns.setSpacing(16)
+        system_left = QVBoxLayout()
+        system_left.setSpacing(16)
+        system_right = QVBoxLayout()
+        system_right.setSpacing(16)
+        system_columns.addLayout(system_left, 1)
+        system_columns.addLayout(system_right, 1)
+        system_page_layout.addLayout(system_columns)
+        system_page_layout.addStretch(1)
+
         # ---------- Tarjeta 6: Actualizaciones ----------
         update_group = QGroupBox("Actualizaciones (red local)")
         update_group.setObjectName("settingsGroup")
@@ -429,7 +454,7 @@ class SettingsWidget(QWidget):
         update_form.addRow(self._label("Versión instalada:"), self.version_label)
         update_form.addRow("", check_update_button)
         update_form.addRow("", update_hint)
-        system_page_layout.addWidget(update_group)
+        system_left.addWidget(update_group)
 
         # ---------- Tarjeta 7: Diagnóstico ----------
         diag_group = QGroupBox("Diagnóstico de la instalación")
@@ -448,7 +473,157 @@ class SettingsWidget(QWidget):
         diag_hint.setWordWrap(True)
         diag_form.addRow("", diag_button)
         diag_form.addRow("", diag_hint)
-        system_page_layout.addWidget(diag_group)
+        system_left.addWidget(diag_group)
+
+        # ---------- Tarjeta 8: Estado de la estación (solo lectura) ----------
+        status_group = QGroupBox("Estado de la estación")
+        status_group.setObjectName("settingsGroup")
+        status_form = QFormLayout(status_group)
+        status_form.setContentsMargins(18, 14, 18, 14)
+        status_form.setSpacing(12)
+
+        self.station_value = QLabel(getattr(Config, "STATION", "CAJA1"))
+        self.station_value.setObjectName("statusValue")
+        self.mode_value = QLabel(
+            "Servidor central" if Config.MODE == "server" else "Local (una PC)")
+        self.mode_value.setObjectName("statusValue")
+        self.server_value = QLabel(Config.SERVER_URL)
+        self.server_value.setObjectName("statusValue")
+        self.server_value.setWordWrap(True)
+        self.server_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        status_hint = QLabel(
+            "Estos datos vienen de config.ini y se fijan antes de iniciar el "
+            "POS. Para cambiarlos edite config.ini en esta PC y reinicie.")
+        status_hint.setObjectName("settingsHint")
+        status_hint.setWordWrap(True)
+        status_form.addRow(self._label("Estación:"), self.station_value)
+        status_form.addRow(self._label("Modo:"), self.mode_value)
+        status_form.addRow(self._label("Servidor:"), self.server_value)
+        status_form.addRow("", status_hint)
+        system_right.addWidget(status_group)
+        system_right.addStretch(1)
+
+        # ---------- Tarjeta 9: Apariencia ----------
+        theme_group = QGroupBox("Tema")
+        theme_group.setObjectName("settingsGroup")
+        theme_form = QFormLayout(theme_group)
+        theme_form.setContentsMargins(18, 14, 18, 14)
+        theme_form.setSpacing(12)
+
+        self.appearance_theme_combo = NoWheelComboBox()
+        self.appearance_theme_combo.addItem("Oscuro", "dark")
+        self.appearance_theme_combo.addItem("Claro", "light")
+        theme_hint = QLabel(
+            "La apariencia se guarda en el servidor y se comparte con todas "
+            "las cajas.")
+        theme_hint.setObjectName("settingsHint")
+        theme_hint.setWordWrap(True)
+        theme_form.addRow(self._label("Tema de la interfaz:"),
+                          self.appearance_theme_combo)
+        theme_form.addRow("", theme_hint)
+        appearance_page_layout.addWidget(theme_group)
+
+        accent_group = QGroupBox("Color de acento")
+        accent_group.setObjectName("settingsGroup")
+        accent_layout = QVBoxLayout(accent_group)
+        accent_layout.setContentsMargins(18, 14, 18, 14)
+        accent_layout.setSpacing(10)
+
+        self._selected_accent = DEFAULT_APPEARANCE["accent"]
+        self.accent_buttons: dict[str, QPushButton] = {}
+        swatch_row = QHBoxLayout()
+        swatch_row.setSpacing(10)
+        for nombre, color in ACCENT_PRESETS:
+            swatch = QPushButton()
+            swatch.setFixedSize(34, 34)
+            swatch.setToolTip(nombre)
+            swatch.clicked.connect(
+                lambda _checked=False, col=color: self._pick_accent(col))
+            self.accent_buttons[color] = swatch
+            swatch_row.addWidget(swatch)
+        other_button = QPushButton("Otro color…")
+        other_button.setObjectName("secondaryButton")
+        other_button.clicked.connect(self._pick_custom_accent)
+        swatch_row.addWidget(other_button)
+        swatch_row.addStretch(1)
+        accent_layout.addLayout(swatch_row)
+        accent_hint = QLabel(
+            "Se usa en botones principales, selección y resaltados.")
+        accent_hint.setObjectName("settingsHint")
+        accent_layout.addWidget(accent_hint)
+        appearance_page_layout.addWidget(accent_group)
+
+        size_group = QGroupBox("Tamaño y densidad")
+        size_group.setObjectName("settingsGroup")
+        size_form = QFormLayout(size_group)
+        size_form.setContentsMargins(18, 14, 18, 14)
+        size_form.setSpacing(12)
+
+        font_row = QHBoxLayout()
+        font_row.setSpacing(10)
+        self.appearance_font_slider = QSlider(Qt.Orientation.Horizontal)
+        self.appearance_font_slider.setRange(85, 135)
+        self.appearance_font_slider.setSingleStep(5)
+        self.appearance_font_slider.setPageStep(5)
+        self.appearance_font_slider.setValue(100)
+        self.appearance_font_label = QLabel("100%")
+        self.appearance_font_label.setObjectName("statusValue")
+        self.appearance_font_label.setMinimumWidth(52)
+        font_row.addWidget(self.appearance_font_slider, 1)
+        font_row.addWidget(self.appearance_font_label)
+
+        self.appearance_density_combo = NoWheelComboBox()
+        for clave, etiqueta in DENSITY_LABELS.items():
+            self.appearance_density_combo.addItem(etiqueta, clave)
+
+        size_form.addRow(self._label("Tamaño del texto:"), font_row)
+        size_form.addRow(self._label("Densidad:"),
+                         self.appearance_density_combo)
+        appearance_page_layout.addWidget(size_group)
+
+        preview_group = QGroupBox("Vista previa")
+        preview_group.setObjectName("settingsGroup")
+        preview_layout = QVBoxLayout(preview_group)
+        preview_layout.setContentsMargins(18, 14, 18, 14)
+        preview_layout.setSpacing(10)
+        preview = QWidget()
+        preview.setObjectName("appearancePreview")
+        preview_box = QVBoxLayout(preview)
+        preview_box.setContentsMargins(14, 12, 14, 12)
+        preview_box.setSpacing(8)
+        preview_title = QLabel("Texto de ejemplo")
+        preview_title.setObjectName("sectionTitle")
+        preview_hint = QLabel("Así se verá la interfaz de la caja.")
+        preview_hint.setObjectName("settingsHint")
+        preview_input = QLineEdit()
+        preview_input.setPlaceholderText("Campo de texto")
+        preview_primary = QPushButton("Botón principal")
+        preview_primary.setObjectName("primaryButton")
+        preview_secondary = QPushButton("Botón secundario")
+        preview_secondary.setObjectName("secondaryButton")
+        preview_buttons = QHBoxLayout()
+        preview_buttons.setSpacing(10)
+        preview_buttons.addWidget(preview_primary)
+        preview_buttons.addWidget(preview_secondary)
+        preview_buttons.addStretch(1)
+        preview_box.addWidget(preview_title)
+        preview_box.addWidget(preview_hint)
+        preview_box.addWidget(preview_input)
+        preview_box.addLayout(preview_buttons)
+        preview_layout.addWidget(preview)
+        appearance_page_layout.addWidget(preview_group)
+
+        appearance_actions = QHBoxLayout()
+        appearance_actions.setSpacing(10)
+        reset_appearance = QPushButton("Restablecer apariencia")
+        reset_appearance.setObjectName("resetButton")
+        reset_appearance.clicked.connect(self._reset_appearance)
+        appearance_actions.addWidget(reset_appearance)
+        appearance_actions.addStretch(1)
+        appearance_page_layout.addLayout(appearance_actions)
+        appearance_page_layout.addStretch(1)
 
         # ---------- Acciones ----------
         buttons = QHBoxLayout()
@@ -472,9 +647,18 @@ class SettingsWidget(QWidget):
         tabs.addTab(promo_page, "Promociones")
         tabs.addTab(hacienda_page, "Hacienda")
         tabs.addTab(printer_page, "Impresora y docs")
+        tabs.addTab(appearance_page, "Apariencia")
         tabs.addTab(system_page, "Sistema")
         outer.addWidget(tabs, 1)
         outer.addLayout(buttons)
+
+        self.appearance_theme_combo.currentIndexChanged.connect(
+            self._preview_appearance)
+        self.appearance_density_combo.currentIndexChanged.connect(
+            self._preview_appearance)
+        self.appearance_font_slider.valueChanged.connect(
+            self._on_font_scale_changed)
+        self._refresh_swatches()
 
     def _field_row(self, field: QLineEdit, toggle: QPushButton) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -487,6 +671,98 @@ class SettingsWidget(QWidget):
         self._load_config()
         QMessageBox.information(self, "Configuración",
                                 "Se restauraron los valores guardados.")
+
+    # ---------- apariencia ----------
+
+    def _appearance_values(self) -> dict:
+        return {
+            "theme": self.appearance_theme_combo.currentData() or "dark",
+            "accent": self._selected_accent,
+            "font_scale": self.appearance_font_slider.value() / 100.0,
+            "density": self.appearance_density_combo.currentData() or "normal",
+        }
+
+    def _apply_appearance_controls(self, settings: dict) -> None:
+        index = self.appearance_theme_combo.findData(
+            settings.get("theme", "dark"))
+        if index >= 0:
+            self.appearance_theme_combo.blockSignals(True)
+            self.appearance_theme_combo.setCurrentIndex(index)
+            self.appearance_theme_combo.blockSignals(False)
+        self._selected_accent = (settings.get("accent")
+                                 or DEFAULT_APPEARANCE["accent"])
+        try:
+            escala = int(round(float(settings.get("font_scale", 1.0)) * 100))
+        except (TypeError, ValueError):
+            escala = 100
+        self.appearance_font_slider.blockSignals(True)
+        self.appearance_font_slider.setValue(max(85, min(135, escala)))
+        self.appearance_font_slider.blockSignals(False)
+        self.appearance_font_label.setText(
+            f"{self.appearance_font_slider.value()}%")
+        index = self.appearance_density_combo.findData(
+            settings.get("density", "normal"))
+        if index >= 0:
+            self.appearance_density_combo.blockSignals(True)
+            self.appearance_density_combo.setCurrentIndex(index)
+            self.appearance_density_combo.blockSignals(False)
+        self._refresh_swatches()
+
+    def _load_appearance(self) -> None:
+        try:
+            settings = load_appearance(self.services.get("db"))
+        except Exception:
+            settings = dict(DEFAULT_APPEARANCE)
+        self._apply_appearance_controls(settings)
+
+    def _pick_accent(self, color: str) -> None:
+        self._selected_accent = color
+        self._refresh_swatches()
+        self._preview_appearance()
+
+    def _pick_custom_accent(self) -> None:
+        from PyQt6.QtGui import QColor
+        from PyQt6.QtWidgets import QColorDialog
+        color = QColorDialog.getColor(
+            QColor(self._selected_accent), self, "Color de acento")
+        if color.isValid():
+            self._pick_accent(color.name())
+
+    def _refresh_swatches(self) -> None:
+        for color, button in self.accent_buttons.items():
+            selected = color.lower() == str(self._selected_accent).lower()
+            borde = ("3px solid #ffffff" if selected
+                     else "1px solid rgba(0, 0, 0, 0.25)")
+            try:
+                r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+                luminancia = 0.299 * r + 0.587 * g + 0.114 * b
+                tinta = "#0e1a12" if luminancia > 140 else "#ffffff"
+            except Exception:
+                tinta = "#ffffff"
+            button.setText("✓" if selected else "")
+            button.setStyleSheet(
+                f"background-color: {color}; border: {borde}; "
+                f"border-radius: 8px; color: {tinta}; font-weight: bold;")
+
+    def _on_font_scale_changed(self, value: int) -> None:
+        self.appearance_font_label.setText(f"{value}%")
+        self._preview_appearance()
+
+    def _preview_appearance(self, *_args) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, self._appearance_values())
+
+    def _reset_appearance(self) -> None:
+        self._apply_appearance_controls(dict(DEFAULT_APPEARANCE))
+        self._preview_appearance()
+        QMessageBox.information(
+            self, "Apariencia",
+            "Se restableció la apariencia. Pulse «Guardar» para aplicarla a "
+            "todas las cajas.")
+
+    def _save_appearance(self) -> None:
+        save_appearance(self.services.get("db"), self._appearance_values())
 
     def _browse_certificate(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -553,6 +829,7 @@ class SettingsWidget(QWidget):
                 pass
         if not config_applied and self.memory_config:
             self._apply_config(self.memory_config)
+        self._load_appearance()
 
     def _save(self) -> None:
         values = self._config_values()
@@ -632,9 +909,10 @@ class SettingsWidget(QWidget):
             pass
 
     def _save_extras(self) -> None:
-        """Guarda impresora, papel, A4 y datos extra de empresa."""
+        """Guarda impresora, papel, A4, datos extra de empresa y apariencia."""
         self._save_printer()
         self._save_empresa_extra()
+        self._save_appearance()
 
     def _save_empresa_extra(self) -> None:
         """Guarda correo, IBAN, SINPE y logo del ticket (app_config)."""

@@ -1,9 +1,11 @@
 """Ventana principal del POS La Loma."""
 
+import json
 from threading import Thread
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QHBoxLayout,
     QLabel,
@@ -26,6 +28,7 @@ from modules.settings.settings_widget import SettingsWidget
 from network.session import session
 
 from ui.login_dialog import LoginDialog
+from ui.theme import apply_theme, current_appearance, load_appearance
 
 NAV_ITEMS = [
     ("Ventas", "pos"),
@@ -67,6 +70,31 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._wire_signals()
         self._start_connection_checker()
+        self._appearance_key = self._appearance_signature()
+        self._start_appearance_sync()
+
+    def _appearance_signature(self, appearance: dict | None = None) -> str:
+        appearance = appearance if appearance is not None else current_appearance()
+        return json.dumps(appearance, sort_keys=True)
+
+    def _start_appearance_sync(self) -> None:
+        """Mantiene el tema compartido sincronizado con el servidor."""
+        timer = QTimer(self)
+        timer.timeout.connect(self._sync_appearance)
+        timer.start(CHECK_INTERVAL_MS)
+
+    def _sync_appearance(self) -> None:
+        try:
+            settings = load_appearance(self.services.get("db"))
+        except Exception:
+            return
+        clave = self._appearance_signature(settings)
+        if clave == self._appearance_key:
+            return
+        self._appearance_key = clave
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, settings)
 
     def _setup_ui(self) -> None:
         central = QWidget()
@@ -240,7 +268,7 @@ class MainWindow(QMainWindow):
             self.user_label.setText(f"Usuario: {session.user_name}")
         else:
             self.user_label.setText("Usuario: sin sesión")
-        self.user_label.setStyleSheet("color: #b9c2cf; padding: 0 8px;")
+        self.user_label.setStyleSheet("padding: 0 8px;")
 
     def _logout(self) -> None:
         if session.token:

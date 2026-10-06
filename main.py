@@ -132,7 +132,7 @@ from network.session import session
 
 from ui.login_dialog import LocalAuth, LoginDialog
 from ui.main_window import MainWindow
-from ui.styles import QSS_MAIN
+from ui.theme import DEFAULT_APPEARANCE, apply_theme, load_appearance
 
 
 class SafeApplication(QApplication):
@@ -490,7 +490,7 @@ def _main() -> int:
     app = SafeApplication(sys.argv)
     app.setStyle("Fusion")
     app.setApplicationName("POS - La Loma")
-    app.setStyleSheet(QSS_MAIN)
+    apply_theme(app, DEFAULT_APPEARANCE)
     _cargar_traductor_es(app)
 
     # El diagnóstico de primera vez corre ya con la ventana en pantalla: no
@@ -541,6 +541,7 @@ def _main() -> int:
             return 1
 
     services = build_services(db)
+    apply_theme(app, load_appearance(db))
     window = MainWindow(services)
     window.showMaximized()
     code = app.exec()

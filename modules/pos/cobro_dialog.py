@@ -18,40 +18,41 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.helpers import format_currency, NoWheelComboBox
+from ui.theme import current_appearance, render_qss
 
 _COBRO_QSS = """
 QDialog#CobroDialog {
-    background-color: #14161c;
-    border: 1px solid #2fbf71;
+    background-color: @bg@;
+    border: 1px solid @accent@;
 }
 QLabel#cobroTotalLabel {
-    color: #2fbf71;
+    color: @accent@;
     font-size: 35px;
     font-weight: bold;
 }
 QLabel#titleLabel {
-    color: #ffffff;
+    color: @text_bright@;
     font-size: 19px;
     font-weight: bold;
 }
 QLabel#subtitleLabel {
-    color: #9aa4b2;
+    color: @text_muted@;
     font-size: 13px;
 }
 QLabel#changeLabel {
-    color: #2fbf71;
+    color: @accent@;
     font-size: 23px;
     font-weight: bold;
 }
 QLabel#errorLabel {
-    color: #ef4444;
+    color: @danger@;
     font-size: 13px;
     font-weight: bold;
 }
 QPushButton#methodButton {
-    background-color: #1f2530;
-    color: #b9c2cf;
-    border: 2px solid #2e3440;
+    background-color: @button_secondary@;
+    color: @text_dim2@;
+    border: 2px solid @border2@;
     border-radius: 8px;
     padding: 10px 6px;
     font-size: 14px;
@@ -60,17 +61,17 @@ QPushButton#methodButton {
     min-height: 22px;
 }
 QPushButton#methodButton:hover {
-    background-color: #262d3a;
-    border-color: #3d4557;
+    background-color: @button_hover@;
+    border-color: @border_hover@;
 }
 QPushButton#methodButton:checked {
-    background-color: #3b82f6;
-    border-color: #3b82f6;
-    color: #ffffff;
+    background-color: @info@;
+    border-color: @info@;
+    color: @text_bright@;
 }
 QPushButton#cobrarButton {
-    background-color: #2fbf71;
-    color: #0e1a12;
+    background-color: @accent@;
+    color: @on_accent@;
     border: none;
     border-radius: 8px;
     padding: 14px 20px;
@@ -79,19 +80,19 @@ QPushButton#cobrarButton {
     min-height: 28px;
 }
 QPushButton#cobrarButton:hover {
-    background-color: #3dd081;
+    background-color: @accent_hover@;
 }
 QPushButton#cobrarButton:pressed {
-    background-color: #279d5c;
+    background-color: @accent_pressed@;
 }
 QPushButton#cobrarButton:disabled {
-    background-color: #1a1e26;
-    color: #5b6472;
+    background-color: @input@;
+    color: @text_disabled@;
 }
 QLineEdit#cashInput {
-    background-color: #1f2530;
-    color: #ffffff;
-    border: 2px solid #3b82f6;
+    background-color: @button_secondary@;
+    color: @text_bright@;
+    border: 2px solid @info@;
     border-radius: 8px;
     padding: 8px 14px;
     font-size: 19px;
@@ -99,12 +100,12 @@ QLineEdit#cashInput {
     min-height: 18px;
 }
 QLineEdit#cashInput:focus {
-    border-color: #2fbf71;
+    border-color: @accent@;
 }
 QComboBox#mixMethod {
-    background-color: #262b36;
-    color: #e6e9ef;
-    border: 2px solid #3b82f6;
+    background-color: @button@;
+    color: @text@;
+    border: 2px solid @info@;
     border-radius: 8px;
     padding: 8px 10px;
     font-size: 14px;
@@ -112,20 +113,20 @@ QComboBox#mixMethod {
     min-width: 120px;
 }
 QPushButton#fillButton {
-    background-color: #1f2530;
-    color: #3b82f6;
-    border: 2px solid #3b82f6;
+    background-color: @button_secondary@;
+    color: @info@;
+    border: 2px solid @info@;
     border-radius: 8px;
     padding: 8px 12px;
     font-size: 14px;
     font-weight: bold;
 }
 QPushButton#fillButton:hover {
-    background-color: #262d3a;
+    background-color: @button_hover@;
 }
 QPushButton#successButton {
-    background-color: #2fbf71;
-    color: #0e1a12;
+    background-color: @accent@;
+    color: @on_accent@;
     border: none;
     border-radius: 8px;
     padding: 12px 20px;
@@ -133,11 +134,11 @@ QPushButton#successButton {
     font-weight: bold;
 }
 QPushButton#successButton:hover {
-    background-color: #3dd081;
+    background-color: @accent_hover@;
 }
 QPushButton#closeButton {
-    background-color: #374151;
-    color: #ffffff;
+    background-color: @neutral_button@;
+    color: @text_bright@;
     border: none;
     border-radius: 8px;
     padding: 12px 20px;
@@ -145,11 +146,31 @@ QPushButton#closeButton {
     font-weight: bold;
 }
 QPushButton#closeButton:hover {
-    background-color: #4b5563;
+    background-color: @neutral_button_hover@;
 }
 QFrame#separator {
-    background-color: #2e3440;
+    background-color: @border2@;
     max-height: 1px;
+}
+QLabel#discountLabel {
+    color: @accent@;
+    font-weight: bold;
+}
+QLabel#successInvoice {
+    background-color: @accent@;
+    color: @on_accent@;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 20px;
+    font-weight: bold;
+}
+QLabel#successTotal {
+    background-color: @accent@;
+    color: @on_accent@;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 18px;
+    font-weight: bold;
 }
 """
 
@@ -240,7 +261,7 @@ class CobroDialog(QDialog):
         self.setWindowTitle("Cobrar")
         self.setMinimumSize(600, 500)
         self.setMaximumHeight(720)
-        self.setStyleSheet(_COBRO_QSS)
+        self.setStyleSheet(render_qss(_COBRO_QSS, current_appearance()))
         self._build_ui()
         self._aplicar_descuento_metodo()
         self._update_change()
@@ -291,9 +312,8 @@ class CobroDialog(QDialog):
         self._root.addWidget(self.total_display)
 
         self.discount_display = QLabel("")
+        self.discount_display.setObjectName("discountLabel")
         self.discount_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.discount_display.setStyleSheet(
-            "color: #2fbf71; font-weight: bold;")
         self.discount_display.setVisible(False)
         self._root.addWidget(self.discount_display)
 
@@ -732,14 +752,12 @@ class CobroDialog(QDialog):
 
         if self.invoice_number:
             num_label = QLabel(f"Factura: {self.invoice_number}")
-            num_label.setObjectName("totalLabel")
-            num_label.setStyleSheet("font-size:20px; color:#ffffff;")
+            num_label.setObjectName("successInvoice")
             num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             success_root.addWidget(num_label)
 
         total_label = QLabel(f"Total: {format_currency(self.total, self.currency)}")
-        total_label.setObjectName("totalLabel")
-        total_label.setStyleSheet("font-size:18px; color:#2fbf71;")
+        total_label.setObjectName("successTotal")
         total_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         success_root.addWidget(total_label)
 
