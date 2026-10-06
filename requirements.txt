@@ -3,4 +3,4 @@ PyQt6==6.11.0
 requests==2.34.2
 # Verificación de la firma de las actualizaciones (también genera el
 # certificado HTTPS con tools/generar_certificado.py).
-cryptography==43.0.3
+cryptography==50.0.0
