@@ -746,7 +746,28 @@ def test_visor_renderiza_con_la_geometria_del_papel():
         "el contenido debe ocupar el ancho útil del papel"
 
 
-def test_margenes_impresos_coinciden_con_el_visor():
+@pytest.fixture
+def impresora_pdf_a4(monkeypatch):
+    """Fija el papel del QPrinter sin cambiar preferencias de Windows.
+
+    Estas pruebas miden 74 mm de contenido sobre una hoja ancha. El driver
+    puede tener un formulario angosto como predeterminado (p. ej. 3 x 5 in).
+    """
+    from PyQt6.QtGui import QPageSize
+    from modules.documentos import ticket
+
+    preparar = ticket._preparar_impresora
+
+    def con_papel_a4(*args, **kwargs):
+        printer = preparar(*args, **kwargs)
+        if printer is not None:
+            assert printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        return printer
+
+    monkeypatch.setattr(ticket, "_preparar_impresora", con_papel_a4)
+
+
+def test_margenes_impresos_coinciden_con_el_visor(impresora_pdf_a4):
     """Regresión: el ticket salía corrido a la derecha y estirado al ancho
     del área imprimible (con el lado derecho recortado)."""
     pytest.importorskip("PyQt6.QtPdf")
@@ -790,7 +811,7 @@ def test_margenes_impresos_coinciden_con_el_visor():
     assert y0 == pytest.approx(3.0, abs=1.0), "margen superior"
 
 
-def test_desplazamiento_mueve_el_ticket_en_el_papel():
+def test_desplazamiento_mueve_el_ticket_en_el_papel(impresora_pdf_a4):
     """Con X negativo el ticket usa el espacio de la izquierda y deja más
     margen a la derecha; con Y positivo baja."""
     pytest.importorskip("PyQt6.QtPdf")

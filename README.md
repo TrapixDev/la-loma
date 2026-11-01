@@ -10,6 +10,11 @@ Python + PyQt6, base SQLite, servidor local para varias cajas (LAN).
 - Cobro en **colones o USD** (tipo de cambio editable y desde API de mercado,
   no BCCR oficial) y **pago mixto** (Efectivo + Tarjeta/SINPE) con Enter.
 - **Ticket térmico 80 mm** (impresora configurable por caja) y **PDF A4** (Qt).
+- **Envío automático por correo**: al generarse una factura electrónica se
+  envía el PDF y el XML al correo del cliente (SMTP cifrado, en segundo plano;
+  ver "Envío de facturas por correo" en `INSTRUCCIONES.txt`).
+  El XML es el respaldo local v4.3; el POS no descarga el XML firmado del
+  proveedor ni la respuesta de Hacienda para adjuntarlos.
 - Reimpresión y anulación de ventas, notas de crédito, reportes (ingresos,
   ganancias, gastos), clientes, productos con fotos, categorías.
 - Varias cajas conectadas a un **servidor central** por HTTP local

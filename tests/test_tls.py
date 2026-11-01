@@ -23,10 +23,10 @@ from config import Config
 from network.remote_db import RemoteDatabase
 from server import start_server
 
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.usefixtures("servidor_aislado"), pytest.mark.skipif(
     subprocess.run([sys.executable, "-c", "import cryptography"],
                    capture_output=True).returncode != 0,
-    reason="Requiere el paquete cryptography (solo para pruebas)")
+    reason="Requiere el paquete cryptography (solo para pruebas)")]
 
 
 def _generar_certificado(destino: Path, clave: Path) -> None:

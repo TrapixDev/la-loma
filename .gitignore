@@ -12,6 +12,8 @@ data/
 *.db-journal
 *.log
 .env
+.venv/
+_respaldo_*/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/

@@ -106,6 +106,37 @@ en subcarpetas por mes:  Facturas\2026-08\V-00001_2026-08-09.pdf
 Las cajas imprimen el ticket térmico con su impresora local; el PDF A4
 se imprime con la impresora predeterminada de Windows de cada caja.
 
+Envío de facturas por correo
+----------------------------
+Cuando se genera una factura electrónica, el POS puede enviar el PDF y el
+XML al correo del cliente automáticamente. Solo aplica a factura
+electrónica (no a la simplificada) y solo si el cliente tiene correo.
+El XML adjunto es el respaldo local generado por el POS (v4.3); no es un
+XML firmado descargado del proveedor ni incluye la respuesta de Hacienda.
+El envío requiere que existan ambos archivos, PDF y XML.
+1. Cree (o use) una cuenta de correo del negocio para enviar facturas.
+   Use un proveedor SMTP que admita usuario y contraseña. En Gmail, si su
+   cuenta lo permite, active la verificación en dos pasos y cree una
+   "contraseña de aplicación" (no use la contraseña normal).
+2. En Configuración > Hacienda > "Envío de facturas por correo" llene:
+   servidor SMTP, puerto, seguridad, usuario, contraseña y remitente.
+   Valores típicos:
+     Gmail    smtp.gmail.com        587 (STARTTLS)  o 465 (SSL/TLS)
+   OAuth2 todavía no está implementado. Outlook.com exige OAuth2 y no es
+   compatible con este envío mediante usuario y contraseña. Referencias:
+     https://support.microsoft.com/en-us/outlook/pop-imap-and-smtp-settings-for-outlook-com
+     https://support.google.com/accounts/answer/185833?hl=es
+3. Use "Enviar correo de prueba…" para confirmar que funciona, marque
+   "Enviar automáticamente la factura electrónica…" y Guardar.
+4. La contraseña se guarda cifrada (DPAPI) SOLO en la PC donde se escribe,
+   en %APPDATA%\PosLaLoma\smtp_password.dat. Cada caja que vaya a enviar
+   correos debe abrir esta pantalla y escribir la contraseña una vez; el
+   resto de los datos se comparte entre cajas.
+5. El envío se hace en segundo plano: el cobro no espera. Si falla, la
+   cajera ve un aviso y la venta queda guardada; el PDF y el XML siguen en
+   la carpeta de documentos para enviarlos a mano. Cada envío (o fallo)
+   queda en el registro de auditoría (FACTURA_CORREO / FACTURA_CORREO_FALLO).
+
 Respaldos y restauración
 ------------------------
 - Respaldos automáticos cada 6 h en %APPDATA%\PosLaLoma\data\backups.

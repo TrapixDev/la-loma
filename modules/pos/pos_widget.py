@@ -1,6 +1,7 @@
 """Widget del punto de venta: búsqueda, carrito y cobro."""
 
 import json
+import threading
 from uuid import uuid4
 
 from dataclasses import fields as dataclass_fields
@@ -41,7 +42,7 @@ from utils.helpers import (
     format_currency,
     NoWheelComboBox,
 )
-from modules.documentos import generar_documentos
+from modules.documentos import email_service, generar_documentos
 from modules.documentos.ticket import get_printer_name, imprimir_ticket_venta
 from modules.documentos.xml_factura import build_factura_payload
 from modules.pos.cobro_dialog import CobroDialog
@@ -113,10 +114,14 @@ class ProductCard(QWidget):
 
 class POSWidget(QWidget):
     sale_completed = pyqtSignal(dict)
+    # (ok, mensaje, detalle): lo emite el hilo del envío de correo y lo
+    # recibe el hilo de la interfaz (conexión en cola automática).
+    _correo_resultado = pyqtSignal(bool, str, str)
 
     def __init__(self, services: dict, parent: QWidget | None = None):
         super().__init__(parent)
         self.services = services
+        self._correo_resultado.connect(self._on_correo_resultado)
         self.cart: list[dict] = []
         self.client = None
         self.categories: list = []
@@ -818,6 +823,8 @@ class POSWidget(QWidget):
                                 f"No se pudieron generar los respaldos:\n{exc}")
             return {}
 
+        self._enviar_correo_automatico(saved, company, documents, clave)
+
         if print_requested:
             try:
                 ok = imprimir_ticket_venta(saved, company, self.services["db"],
@@ -835,6 +842,81 @@ class POSWidget(QWidget):
                     f"El PDF de la factura quedó guardado en:\n"
                     f"{documents.get('pdf', '')}")
         return documents
+
+    def _enviar_correo_automatico(self, saved, company: dict, documents: dict,
+                                  clave: str) -> None:
+        """Envía PDF+XML al correo del cliente cuando se generó una factura
+        electrónica y el envío automático está activo.
+
+        Corre en un hilo para no frenar el cobro y nunca bloquea la venta:
+        cualquier problema solo se avisa después.
+        """
+        try:
+            db = self.services.get("db")
+            if db is None:
+                return
+            cfg = email_service.cargar_config_correo(db)
+            destinatario = str(getattr(self.client, "email", "") or "").strip()
+            motivo = email_service.motivo_no_envio(cfg, destinatario, documents)
+            if motivo == "sin_correo_cliente":
+                self._auditar_correo(
+                    "FACTURA_CORREO_OMITIDA",
+                    f"{saved.invoice_number}: el cliente no tiene correo válido")
+                self._mostrar_estado_correo(
+                    "Factura no enviada por correo: el cliente no tiene correo.")
+                return
+            if motivo == "config_incompleta":
+                self._mostrar_estado_correo(
+                    "Factura no enviada por correo: falta configurar el correo "
+                    "en Configuración → Hacienda.")
+                return
+            if motivo:
+                return
+            numero = str(getattr(saved, "invoice_number", ""))
+            detalle = f"{numero} -> {destinatario}"
+            self._mostrar_estado_correo(f"Enviando factura a {destinatario}…")
+        except Exception:
+            return
+
+        def _trabajo() -> None:
+            ok, mensaje = email_service.enviar_factura(
+                cfg, company, saved, destinatario, documents, clave)
+            self._correo_resultado.emit(ok, mensaje, detalle)
+
+        threading.Thread(target=_trabajo, name="envio-correo",
+                         daemon=True).start()
+
+    def _on_correo_resultado(self, ok: bool, mensaje: str, detalle: str) -> None:
+        """Resultado del envío (hilo de interfaz)."""
+        if ok:
+            self._auditar_correo("FACTURA_CORREO", detalle)
+            self._mostrar_estado_correo(mensaje)
+            return
+        self._auditar_correo("FACTURA_CORREO_FALLO", f"{detalle}: {mensaje}")
+        self._mostrar_estado_correo("No se pudo enviar la factura por correo.")
+        QMessageBox.warning(
+            self, "Correo de la factura",
+            f"No se pudo enviar la factura por correo ({detalle}):\n{mensaje}\n\n"
+            "La venta y los archivos de la factura (PDF y XML) quedaron "
+            "guardados; puede enviarlos manualmente desde la carpeta de "
+            "documentos.")
+
+    def _mostrar_estado_correo(self, texto: str) -> None:
+        """Mensaje breve en la barra de estado (sin diálogos que estorben)."""
+        try:
+            ventana = self.window()
+            if hasattr(ventana, "statusBar"):
+                ventana.statusBar().showMessage(texto, 8000)
+        except Exception:
+            pass
+
+    def _auditar_correo(self, evento: str, detalle: str) -> None:
+        try:
+            self.services["db"].audit(
+                session.user_id, session.user_name,
+                getattr(Config, "STATION", "CAJA-1"), evento, detalle)
+        except Exception:
+            pass
 
     def _abrir_pdf_de_prueba(self) -> None:
         """Si se imprimió a la impresora virtual, abre el PDF generado."""

@@ -11,12 +11,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 PROJECT_DIR = str(Path(__file__).resolve().parents[1])
 sys.path.insert(0, PROJECT_DIR)
 os.chdir(PROJECT_DIR)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from server import start_server, validate_sql
+
+pytestmark = pytest.mark.usefixtures("servidor_aislado")
 
 TMP_DIR = Path(PROJECT_DIR) / "tests" / ".tmp" / "updates"
 

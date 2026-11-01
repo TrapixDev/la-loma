@@ -11,6 +11,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 PROJECT_DIR = str(Path(__file__).resolve().parents[1])
 sys.path.insert(0, PROJECT_DIR)
 os.chdir(PROJECT_DIR)
@@ -20,6 +22,8 @@ import server as server_module
 from config import Config
 from server import (MAX_BODY_BYTES, ip_permitida, parse_content_length,
                     start_server, valid_params)
+
+pytestmark = pytest.mark.usefixtures("servidor_aislado")
 
 
 def post(base, path, payload, token="", timeout=8):

@@ -303,6 +303,61 @@ class SettingsWidget(QWidget):
         hacienda_form.addRow(self._label("Numeración:"), numbering_row)
         hacienda_page_layout.addWidget(hacienda_group)
 
+        # ---------- Tarjeta: Envío de facturas por correo ----------
+        email_group = QGroupBox("Envío de facturas por correo")
+        email_group.setObjectName("settingsGroup")
+        email_form = QFormLayout(email_group)
+        email_form.setContentsMargins(18, 14, 18, 14)
+        email_form.setSpacing(12)
+
+        self.email_auto_check = QCheckBox(
+            "Enviar automáticamente la factura electrónica al correo del cliente")
+        self.smtp_host_input = QLineEdit()
+        self.smtp_host_input.setPlaceholderText("smtp.gmail.com")
+        self.smtp_port_input = QLineEdit()
+        self.smtp_port_input.setPlaceholderText("587")
+        self.smtp_security_combo = NoWheelComboBox()
+        self.smtp_security_combo.addItem("STARTTLS (puerto 587)", "starttls")
+        self.smtp_security_combo.addItem("SSL/TLS (puerto 465)", "ssl")
+        self.smtp_user_input = QLineEdit()
+        self.smtp_user_input.setPlaceholderText("facturas@sudominio.com")
+        self.smtp_password_input, smtp_password_toggle = self._password_field()
+        self.smtp_from_input = QLineEdit()
+        self.smtp_from_input.setPlaceholderText(
+            "Correo que aparece como remitente (por defecto, el usuario)")
+        email_test_button = QPushButton("Enviar correo de prueba…")
+        email_test_button.setObjectName("secondaryButton")
+        email_test_button.clicked.connect(self._test_email)
+        self.smtp_security_combo.currentIndexChanged.connect(
+            self._on_smtp_security_changed)
+
+        smtp_server_row = QHBoxLayout()
+        smtp_server_row.setSpacing(10)
+        smtp_server_row.addLayout(self._mini_field("Servidor", self.smtp_host_input), 3)
+        smtp_server_row.addLayout(self._mini_field("Puerto", self.smtp_port_input), 1)
+        smtp_server_row.addLayout(
+            self._mini_field("Seguridad", self.smtp_security_combo), 2)
+
+        email_form.addRow("", self.email_auto_check)
+        email_form.addRow(self._label("Servidor SMTP:"), smtp_server_row)
+        email_form.addRow(self._label("Usuario:"), self.smtp_user_input)
+        email_form.addRow(self._label("Contraseña:"),
+                          self._field_row(self.smtp_password_input,
+                                          smtp_password_toggle))
+        email_form.addRow(self._label("Remitente:"), self.smtp_from_input)
+        email_form.addRow("", email_test_button)
+        email_hint = QLabel(
+            "Se envía el PDF y el XML de respaldo cuando se genera una factura "
+            "electrónica y el cliente tiene correo. Use un servidor SMTP con "
+            "usuario y contraseña; en Gmail, una contraseña de aplicación. "
+            "Las cuentas que exigen OAuth2 (como Outlook.com) aún no son "
+            "compatibles. La contraseña se guarda cifrada solo en "
+            "esta PC: cada caja que envíe correos debe configurarla una vez.")
+        email_hint.setObjectName("settingsHint")
+        email_hint.setWordWrap(True)
+        email_form.addRow("", email_hint)
+        hacienda_page_layout.addWidget(email_group)
+
         # ---------- Tarjeta 3: Moneda ----------
         currency_group = QGroupBox("Moneda y Tipo de Cambio")
         currency_group.setObjectName("settingsGroup")
@@ -830,6 +885,7 @@ class SettingsWidget(QWidget):
         if not config_applied and self.memory_config:
             self._apply_config(self.memory_config)
         self._load_appearance()
+        self._load_correo()
 
     def _save(self) -> None:
         values = self._config_values()
@@ -861,7 +917,8 @@ class SettingsWidget(QWidget):
                 if hasattr(db, "guardar_secretos"):
                     db.guardar_secretos(password=nuevos.get("password", ""),
                                         pin=nuevos.get("pin", ""))
-                self._save_extras()
+                if not self._save_extras():
+                    return
                 QMessageBox.information(self, "Configuración", "Configuración guardada correctamente.")
                 return
             except Exception as exc:
@@ -871,7 +928,8 @@ class SettingsWidget(QWidget):
                             "INSERT OR REPLACE INTO hacienda_config (key, value) VALUES (?, ?)",
                             (key, str(value)),
                         )
-                    self._save_extras()
+                    if not self._save_extras():
+                        return
                     QMessageBox.information(self, "Configuración", "Configuración guardada correctamente.")
                     return
                 except Exception:
@@ -908,11 +966,128 @@ class SettingsWidget(QWidget):
         except Exception:
             pass
 
-    def _save_extras(self) -> None:
+    def _save_extras(self) -> bool:
         """Guarda impresora, papel, A4, datos extra de empresa y apariencia."""
         self._save_printer()
         self._save_empresa_extra()
         self._save_appearance()
+        return self._save_correo()
+
+    # ---------- envío de facturas por correo ----------
+
+    def _on_smtp_security_changed(self, _index: int = 0) -> None:
+        """Ajusta el puerto al cambiar la seguridad si tenía un valor típico."""
+        from modules.documentos import email_service
+
+        actual = self.smtp_port_input.text().strip()
+        tipicos = {str(p) for p in email_service.PUERTO_POR_SEGURIDAD.values()}
+        if not actual or actual in tipicos:
+            seguridad = self.smtp_security_combo.currentData() or "starttls"
+            self.smtp_port_input.setText(
+                str(email_service.PUERTO_POR_SEGURIDAD.get(seguridad, 587)))
+
+    def _correo_desde_formulario(self) -> dict:
+        from modules.documentos import email_service
+
+        seguridad = self.smtp_security_combo.currentData() or "starttls"
+        usuario = self.smtp_user_input.text().strip()
+        password = (self.smtp_password_input.text()
+                    or email_service.cargar_password())
+        return {
+            "activo": self.email_auto_check.isChecked(),
+            "host": self.smtp_host_input.text().strip(),
+            "port": email_service._a_puerto(
+                self.smtp_port_input.text(), seguridad),
+            "seguridad": seguridad,
+            "usuario": usuario,
+            "remitente": self.smtp_from_input.text().strip() or usuario,
+            "password": password,
+        }
+
+    def _save_correo(self) -> bool:
+        """Guarda la configuración de envío (la contraseña, solo en esta PC)."""
+        db = self.services.get("db")
+        if db is None:
+            return False
+        try:
+            from modules.documentos import email_service
+
+            cfg = self._correo_desde_formulario()
+            if cfg["activo"] and not email_service.config_completa(cfg):
+                QMessageBox.warning(
+                    self, "Configuración de correo",
+                    "Complete servidor, usuario, contraseña y remitente antes "
+                    "de activar el envío automático.")
+                return False
+            email_service.guardar_config_correo(
+                db, cfg["activo"], cfg["host"], cfg["port"], cfg["seguridad"],
+                cfg["usuario"], self.smtp_from_input.text().strip(),
+                password=self.smtp_password_input.text())
+            self.smtp_password_input.clear()
+            self._mostrar_estado_password()
+            return True
+        except Exception:
+            QMessageBox.warning(
+                self, "Configuración de correo",
+                "No se pudo guardar la configuración de correo. Revise la "
+                "conexión con el servidor y los permisos de esta PC. "
+                "La contraseña escrita se conserva para reintentar.")
+            return False
+
+    def _load_correo(self) -> None:
+        db = self.services.get("db")
+        if db is None:
+            return
+        try:
+            from modules.documentos import email_service
+
+            cfg = email_service.cargar_config_correo(db)
+            self.email_auto_check.setChecked(cfg["activo"])
+            self.smtp_host_input.setText(cfg["host"])
+            self.smtp_port_input.setText(str(cfg["port"]))
+            indice = self.smtp_security_combo.findData(cfg["seguridad"])
+            if indice >= 0:
+                self.smtp_security_combo.blockSignals(True)
+                self.smtp_security_combo.setCurrentIndex(indice)
+                self.smtp_security_combo.blockSignals(False)
+            self.smtp_user_input.setText(cfg["usuario"])
+            self.smtp_from_input.setText(
+                cfg["remitente"] if cfg["remitente"] != cfg["usuario"] else "")
+            self._mostrar_estado_password()
+        except Exception:
+            pass
+
+    def _mostrar_estado_password(self) -> None:
+        from modules.documentos import email_service
+
+        self.smtp_password_input.setPlaceholderText(
+            "Guardada en esta PC (déjela vacía para conservarla)"
+            if email_service.hay_password()
+            else "Contraseña o contraseña de aplicación")
+
+    def _test_email(self) -> None:
+        """Envía un correo de prueba con lo que está escrito en el formulario."""
+        from PyQt6.QtWidgets import QInputDialog
+
+        from modules.documentos import email_service
+
+        cfg = self._correo_desde_formulario()
+        sugerido = self.email_input.text().strip() or cfg["remitente"]
+        destino, aceptado = QInputDialog.getText(
+            self, "Correo de prueba", "Enviar el correo de prueba a:",
+            text=sugerido)
+        if not aceptado:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            ok, mensaje = email_service.enviar_prueba(
+                cfg, self._empresa_actual(), destino.strip())
+        finally:
+            QApplication.restoreOverrideCursor()
+        if ok:
+            QMessageBox.information(self, "Correo de prueba", mensaje)
+        else:
+            QMessageBox.warning(self, "Correo de prueba", mensaje)
 
     def _save_empresa_extra(self) -> None:
         """Guarda correo, IBAN, SINPE y logo del ticket (app_config)."""

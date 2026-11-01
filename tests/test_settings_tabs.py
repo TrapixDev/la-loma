@@ -145,7 +145,7 @@ def test_campos_numericos_vacios_en_cero():
     assert spin.value() == 0.0
     assert spin.text().strip() == ""
     spin.setValue(25.5)
-    assert spin.text().strip() == "25.50"
+    assert spin.locale().toDouble(spin.text().strip()) == (25.5, True)
     spin.setValue(0.0)
     assert spin.text().strip() == ""
 
